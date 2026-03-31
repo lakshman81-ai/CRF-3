@@ -4,6 +4,7 @@
 
 import { STRESS_TABLE, DISPLACEMENT_TABLE } from '../data/report-data.js';
 import { fmt, fmtPct, fmtSigned, fmtNode } from '../utils/formatter.js';
+import { renderTableToggles } from '../utils/table-toggle.js';
 
 export function renderStress(container) {
   container.innerHTML = `
@@ -66,4 +67,5 @@ export function renderStress(container) {
       </table>
     </div>
   `;
+  renderTableToggles(container);
 }

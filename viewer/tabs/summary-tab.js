@@ -6,6 +6,7 @@ import { META, SCOPE_ITEMS, REFERENCES, ASSUMPTIONS, NOTES, SPECIAL_SUPPORTS, NO
 import { state } from '../core/state.js';
 import { emit } from '../core/event-bus.js';
 import { computeOperatingConditions } from '../utils/max-finder.js';
+import { renderTableToggles } from '../utils/table-toggle.js';
 
 export function renderSummary(container) {
   const opCond = computeOperatingConditions(state.parsed);
@@ -61,21 +62,26 @@ export function renderSummary(container) {
         ${SCOPE_ITEMS.map(item => _scopeRow(item, state.scopeToggles[item.id])).join('')}
       </div>
 
-      <h3 class="section-heading" style="margin-top:2rem">Reference Documents</h3>
-      <ul class="conclusion-list">
+      <h3 class="section-heading" style="margin-top:2rem">Reference Documents <span class="add-row-btn" data-target="references" style="cursor:pointer; color:var(--color-primary); font-size:16px;" title="Add row">＋</span></h3>
+      <ul class="conclusion-list" id="references-list">
         ${renderList('references', REFERENCES, true)}
       </ul>
 
-      <h3 class="section-heading" style="margin-top:2rem">Assumptions & Notes</h3>
+      <h3 class="section-heading" style="margin-top:2rem">Assumptions & Notes <span class="add-row-btn" data-target="assumptions" style="cursor:pointer; color:var(--color-primary); font-size:16px;" title="Add row">＋</span></h3>
       <ol class="assumption-list note-field ${state.sticky.notesInitialized ? '' : 'uninitialized'}" id="notes-list">
         ${renderList('assumptions', [...ASSUMPTIONS, ...NOTES], true)}
       </ol>
 
-      <h3 class="section-heading" style="margin-top:2rem">Special Support List</h3>
+      <h3 class="section-heading" style="margin-top:2rem">Special Support List <span class="add-row-btn" data-target="specialSupports" style="cursor:pointer; color:var(--color-primary); font-size:16px;" title="Add row">＋</span></h3>
       <table class="data-table" id="table-special-supports">
         <thead><tr><th>Node</th><th>Tag</th><th>Type</th><th>Qty</th></tr></thead>
         <tbody>
-          ${SPECIAL_SUPPORTS.map(s => `<tr><td contenteditable="true" class="editable-field center">${s.node || '—'}</td><td contenteditable="true" class="editable-field">${s.tag}</td><td contenteditable="true" class="editable-field">${s.type}</td><td class="center editable-field" contenteditable="true">${s.qty}</td></tr>`).join('')}
+          ${(state.sticky.specialSupports || SPECIAL_SUPPORTS).map((s, idx) => `<tr>
+            <td contenteditable="true" class="editable-field center ss-edit" data-idx="${idx}" data-field="node">${s.node || '—'}</td>
+            <td contenteditable="true" class="editable-field ss-edit" data-idx="${idx}" data-field="tag">${s.tag || ''}</td>
+            <td contenteditable="true" class="editable-field ss-edit" data-idx="${idx}" data-field="type">${s.type || ''}</td>
+            <td class="center editable-field ss-edit" contenteditable="true" data-idx="${idx}" data-field="qty">${s.qty || ''}</td>
+          </tr>`).join('')}
         </tbody>
       </table>
     </div>
@@ -136,6 +142,45 @@ export function renderSummary(container) {
       }
     });
   });
+
+  // Special Support edits
+  container.querySelectorAll('.ss-edit').forEach(td => {
+    td.addEventListener('blur', () => {
+      const idx = td.dataset.idx;
+      const field = td.dataset.field;
+      if (idx !== undefined && field) {
+        if (!state.sticky.specialSupports) {
+          state.sticky.specialSupports = JSON.parse(JSON.stringify(SPECIAL_SUPPORTS));
+        }
+        state.sticky.specialSupports[idx][field] = td.textContent.trim();
+        import('../core/state.js').then(m => m.saveStickyState());
+      }
+    });
+  });
+
+  // Add row buttons
+  container.querySelectorAll('.add-row-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const target = btn.dataset.target;
+      if (target === 'specialSupports') {
+         if (!state.sticky.specialSupports) {
+             state.sticky.specialSupports = JSON.parse(JSON.stringify(SPECIAL_SUPPORTS));
+         }
+         state.sticky.specialSupports.push({ node: '', tag: '', type: '', qty: '' });
+      } else {
+         if (!state.sticky[target]) {
+             const defaults = target === 'references' ? REFERENCES : [...ASSUMPTIONS, ...NOTES];
+             state.sticky[target] = defaults.map(d => typeof d === 'object'? `<span class="mono">${d.docNo}</span> - ${d.title}` : d);
+         }
+         state.sticky[target].push('New item...');
+      }
+      import('../core/state.js').then(m => m.saveStickyState());
+      // Re-render tab
+      import('../core/app.js').then(m => m.goToTab('summary'));
+    });
+  });
+
+  renderTableToggles(container);
 }
 
 function _scopeRow(item, checked) {

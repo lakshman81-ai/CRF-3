@@ -93,8 +93,9 @@ function _render(container) {
               <option value="validation">validation</option>
             </select>
           </label>
+          <button id="json-update-btn" class="btn-primary" style="margin-left:10px;">Update State</button>
         </div>
-        <pre class="json-box" id="json-box">${_jsonSection(parsed, 'elements')}</pre>
+        <textarea class="json-box" id="json-box" spellcheck="false" style="width:100%; min-height:350px;">${_jsonSection(parsed, 'elements')}</textarea>
       ` : '<p class="tab-note">Load a file to see raw data.</p>'}
 
     </div>
@@ -112,7 +113,38 @@ function _render(container) {
   // Wire JSON section select
   container.querySelector('#json-section-select')?.addEventListener('change', e => {
     const jsonBox = container.querySelector('#json-box');
-    if (jsonBox && parsed) jsonBox.textContent = _jsonSection(parsed, e.target.value);
+    if (jsonBox && parsed) jsonBox.value = _jsonSection(parsed, e.target.value);
+  });
+
+  // Wire Update State button
+  container.querySelector('#json-update-btn')?.addEventListener('click', () => {
+    const jsonBox = container.querySelector('#json-box');
+    const select = container.querySelector('#json-section-select');
+    if (!jsonBox || !select || !parsed) return;
+
+    try {
+      const newData = JSON.parse(jsonBox.value);
+      parsed[select.value] = newData;
+
+      // Flash success
+      const btn = container.querySelector('#json-update-btn');
+      const oldText = btn.textContent;
+      btn.textContent = '✓ Saved';
+      btn.style.background = 'var(--color-pass)';
+      setTimeout(() => {
+        btn.textContent = oldText;
+        btn.style.background = '';
+      }, 1500);
+
+      // Trigger re-renders if elements changed
+      if (select.value === 'elements' || select.value === 'nodes') {
+        import('../core/event-bus.js').then(({ emit }) => {
+          emit('parse-complete', parsed);
+        });
+      }
+    } catch (err) {
+      alert(`Invalid JSON format:\n${err.message}`);
+    }
   });
 }
 

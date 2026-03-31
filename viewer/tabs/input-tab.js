@@ -10,6 +10,7 @@ import { state } from '../core/state.js';
 import { emit, on } from '../core/event-bus.js';
 import { fmt, fmtNode, materialFromDensity } from '../utils/formatter.js';
 import { computeMaxValues } from '../utils/max-finder.js';
+import { renderTableToggles } from '../utils/table-toggle.js';
 
 let _pinnedLoads = [];
 let _listenersRegistered = false; // prevent duplicate on() calls
@@ -99,10 +100,11 @@ function _render(container) {
       <div class="hide-on-print picker-block">
         ${classGroups.length
           ? `<div class="table-scroll"><table class="data-table pipe-table">
-               <thead><tr><th style="width:40px">Sel</th><th>OD (mm)</th><th>Wall (mm)</th><th>Corrosion (mm)</th><th>Material</th></tr></thead>
+               <thead><tr><th style="width:40px">Sel</th><th>Piping Class</th><th>OD (mm)</th><th>Wall (mm)</th><th>Corrosion (mm)</th><th>Material</th></tr></thead>
                <tbody>
                  ${classGroups.map(g => `<tr>
                     <td><input type="checkbox" class="class-chk" data-hash="${g.hash}" ${state.inputToggles.classes.includes(g.hash) ? 'checked' : ''}></td>
+                    <td class="editable-field" contenteditable="true"></td>
                     <td class="mono">${fmt(g.od, 2)}</td><td class="mono">${fmt(g.wall, 2)}</td>
                     <td class="mono">${g.corrosion !== undefined ? fmt(g.corrosion, 2) : '—'}</td><td>${g.material}</td>
                  </tr>`).join('')}
@@ -115,7 +117,7 @@ function _render(container) {
       <div id="class-display-wrap" style="${state.inputToggles.classes.length ? '' : 'display:none'}">
         <h4 class="sub-heading">Piping Class Info (Display)</h4>
         <table class="data-table pipe-table" id="class-display-table">
-          <thead><tr><th>OD (mm)</th><th>Wall (mm)</th><th>Corrosion (mm)</th><th>Material</th></tr></thead>
+          <thead><tr><th>Piping Class</th><th>OD (mm)</th><th>Wall (mm)</th><th>Corrosion (mm)</th><th>Material</th></tr></thead>
           <tbody id="class-display-body">
             ${_renderClassRows(classGroups)}
           </tbody>
@@ -151,6 +153,7 @@ function _render(container) {
   `;
 
   _wireEvents(container, forces, pipeGroups, classGroups);
+  renderTableToggles(container);
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────
@@ -200,10 +203,15 @@ function _renderPropRows(groups) {
 function _renderClassRows(groups) {
   return groups
     .filter(g => state.inputToggles.classes.includes(g.hash))
-    .map(g => `<tr>
-      <td class="mono">${fmt(g.od, 2)}</td><td class="mono">${fmt(g.wall, 2)}</td>
-      <td class="mono">${g.corrosion !== undefined ? fmt(g.corrosion, 2) : '—'}</td><td>${g.material}</td>
-    </tr>`).join('');
+    .map(g => {
+      // Look up piping class from state or default to empty
+      const pipingClass = state.inputToggles.classNames && state.inputToggles.classNames[g.hash] ? state.inputToggles.classNames[g.hash] : '';
+      return `<tr>
+        <td>${pipingClass}</td>
+        <td class="mono">${fmt(g.od, 2)}</td><td class="mono">${fmt(g.wall, 2)}</td>
+        <td class="mono">${g.corrosion !== undefined ? fmt(g.corrosion, 2) : '—'}</td><td>${g.material}</td>
+      </tr>`;
+    }).join('');
 }
 
 
@@ -294,6 +302,29 @@ function _wireEvents(container, forces, pipeGroups, classGroups) {
     });
   });
 
+  // Ensure we have a place to store piping class names
+  if (!state.inputToggles.classNames) state.inputToggles.classNames = {};
+
+  // Attach blur event listener to editable Piping Class fields to sync with display table
+  container.querySelectorAll('.picker-block .editable-field').forEach(field => {
+    const row = field.closest('tr');
+    if (!row) return;
+    const chk = row.querySelector('.class-chk');
+    if (!chk) return;
+
+    // Set initial text from state if it exists
+    const h = chk.dataset.hash;
+    if (state.inputToggles.classNames[h]) {
+      field.textContent = state.inputToggles.classNames[h];
+    }
+
+    field.addEventListener('blur', () => {
+      state.inputToggles.classNames[h] = field.textContent.trim();
+      const body = container.querySelector('#class-display-body');
+      if (body) body.innerHTML = _renderClassRows(classGroups);
+    });
+  });
+
   container.querySelectorAll('.class-chk').forEach(btn => {
     btn.addEventListener('change', (e) => {
       const h = e.target.dataset.hash;
@@ -302,8 +333,8 @@ function _wireEvents(container, forces, pipeGroups, classGroups) {
       
       const wrap = container.querySelector('#class-display-wrap');
       const body = container.querySelector('#class-display-body');
-      body.innerHTML = _renderClassRows(classGroups);
-      wrap.style.display = state.inputToggles.classes.length ? '' : 'none';
+      if (body) body.innerHTML = _renderClassRows(classGroups);
+      if (wrap) wrap.style.display = state.inputToggles.classes.length ? '' : 'none';
     });
   });
 }

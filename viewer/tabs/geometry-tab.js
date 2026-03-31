@@ -29,21 +29,27 @@ export async function renderGeometry(container) {
         <span class="control-sep"></span>
 
         <label class="control-label" style="margin-left:auto;">
+          Legend:
           <select id="legend-select">
-            <optgroup label="Legend">
-              <option value="pipelineRef">Pipeline Ref</option>
-              <option value="material">Material</option>
-              <option value="T1">T1 (°C)</option>
-              <option value="T2">T2 (°C)</option>
-              <option value="P1">P1 (bar)</option>
-            </optgroup>
-            <optgroup label="Heat Map">
-              <option value="HeatMap:T1">Heat Map: T1</option>
-              <option value="HeatMap:T2">Heat Map: T2</option>
-              <option value="HeatMap:P1">Heat Map: P1</option>
-            </optgroup>
+            <option value="pipelineRef">Legends</option>
+            <option value="material">Material</option>
+            <option value="T1">T1 (°C)</option>
+            <option value="T2">T2 (°C)</option>
+            <option value="P1">P1 (bar)</option>
           </select>
         </label>
+
+        <label class="control-label">
+          Heat Map:
+          <select id="heatmap-select">
+            <option value="None">None</option>
+            <option value="HeatMap:T1">Heat Map: T1</option>
+            <option value="HeatMap:T2">Heat Map: T2</option>
+            <option value="HeatMap:P1">Heat Map: P1</option>
+          </select>
+        </label>
+
+        <button class="btn-secondary" id="pull-data-btn">Pull from data table</button>
 
         <label class="toggle-inline">
           <input type="checkbox" id="tog-labels" ${state.geoToggles.nodeLabels ? 'checked' : ''}> Node Labels
@@ -80,9 +86,11 @@ export async function renderGeometry(container) {
 
   _wireControls(container);
 
-  // If we already have parsed data, re-init renderer
+  // Always init renderer, so ViewCube/Gizmo are ready, even if no data yet.
+  await _ensureRenderer(container);
+
   if (state.parsed) {
-    await _ensureRenderer(container);
+    _setStatus(container, `${state.parsed?.elements?.length ?? 0} elements · ${Object.keys(state.parsed?.nodes ?? {}).length} nodes`);
     _renderer?.rebuild();
   }
 
@@ -94,14 +102,33 @@ export async function renderGeometry(container) {
 }
 
 async function _ensureRenderer(container) {
-  if (_renderer && _initialized) return;
-
   const wrap = container.querySelector('#canvas-wrap');
   const placeholder = container.querySelector('#canvas-placeholder');
   if (!wrap) return;
 
   // Remove placeholder
   if (placeholder) placeholder.remove();
+
+  if (_renderer && _initialized) {
+    // If returning to the tab, re-parent the existing renderer DOM elements
+    if (_renderer._renderer && _renderer._renderer.domElement) {
+        wrap.appendChild(_renderer._renderer.domElement);
+    }
+    if (_renderer._css2d && _renderer._css2d.domElement) {
+        wrap.appendChild(_renderer._css2d.domElement);
+    }
+    // Re-attach viewcube and gizmo if they exist
+    // They might be detached from DOM when the tab content is overwritten.
+    // If we kept references, we should re-append them.
+    if (_renderer._viewCubeEl) {
+      wrap.appendChild(_renderer._viewCubeEl);
+    }
+    if (_renderer._gizmoEl) {
+      wrap.appendChild(_renderer._gizmoEl);
+    }
+    _renderer._onResize(); // Adjust size
+    return;
+  }
 
   // Lazy import to avoid loading Three.js until needed
   const { IsometricRenderer } = await import('../geometry/isometric-renderer.js');
@@ -117,7 +144,23 @@ function _wireControls(container) {
 
   container.querySelector('#legend-select')?.addEventListener('change', e => {
     state.legendField = e.target.value;
+    const heatMapSelect = container.querySelector('#heatmap-select');
+    if (heatMapSelect) heatMapSelect.value = 'None';
     emit('legend-changed', state.legendField);
+  });
+
+  container.querySelector('#heatmap-select')?.addEventListener('change', e => {
+    if (e.target.value === 'None') {
+       const legendSelect = container.querySelector('#legend-select');
+       state.legendField = legendSelect ? legendSelect.value : 'pipelineRef';
+    } else {
+       state.legendField = e.target.value;
+    }
+    emit('legend-changed', state.legendField);
+  });
+
+  container.querySelector('#pull-data-btn')?.addEventListener('click', () => {
+    _renderer?.rebuild();
   });
 
   container.querySelector('#tog-labels')?.addEventListener('change', e => {

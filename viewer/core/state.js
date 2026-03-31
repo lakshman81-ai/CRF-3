@@ -7,10 +7,10 @@ export const state = {
   /** Sticky user overrides for persistent text fields */
   sticky: {
     code: 'ASME B31.3 - 2016',
-    project: 'Tinrhert Field Development Project \u2013 EPC 1',
+    project: 'Petroleum Development Oman-PDO',
     facility: 'Inlet Separation and Boosting Facility, Ohanet',
-    docNo: '08572-TRHT-RT-PI-00-OO-313',
-    revision: '0',
+    docNo: 'XX-XX-PFEED-',
+    revision: 'Rev 0',
     references: [], // user-edited rows
     assumptions: [], // user-edited HTML
     notes: [], // user-edited HTML
@@ -28,6 +28,8 @@ export const state = {
   errors: [],
   /** Currently active tab id */
   activeTab: 'summary',
+  /** Table toggle states */
+  tableToggles: {},
   /** Scope toggle states */
   scopeToggles: {
     code: true,

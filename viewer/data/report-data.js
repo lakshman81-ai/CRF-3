@@ -5,15 +5,15 @@
  */
 
 export const META = {
-  docNumber: '08572-TRHT-RT-PI-00-OO-313',
+  docNumber: 'XX-XX-PFEED-',
   title: 'Pipe Stress Calculation Summary Report',
-  project: 'Tinrhert Field Development Project – EPC 1',
+  project: 'Petroleum Development Oman-PDO',
   facility: 'Inlet Separation and Boosting Facility, Ohanet',
   system: 'SYS-177A',
   projNumber: 'JI-2043',
   designCode: 'ASME B31.3 - 2016',
   software: 'CAESAR-II 2018 (Ver 10.0)',
-  revision: '0',
+  revision: 'Rev 0',
   date: '—',
 };
 
@@ -51,46 +51,19 @@ export const DISPLACEMENT_TABLE = [
   { node: 649, dx: 0.0,  dy: 6.1,  dz: -1.8, loadCase: 'Operating', note: '< 10mm ✓' },
 ];
 
-export const SPECIAL_SUPPORTS = [
-  { node: 50,  tag: 'RS2-14A-102-24-DS', type: 'Rigid Strut',       qty: 1 },
-  { node: 120, tag: 'RS4-14A-103-24-DS', type: 'Rigid Strut',       qty: 1 },
-  { node: 815, tag: 'RS4-14A-101-20-DS', type: 'Rigid Strut',       qty: 1 },
-  { node: 120, tag: 'SH8-14A-102-24-DS', type: 'Spring Hanger',     qty: 1 },
-  { node: 165, tag: '—',                 type: 'Spring Hanger',     qty: 1 },
-  { node: 780, tag: 'SH8-14A-103-24-DS', type: 'Spring Hanger',     qty: 1 },
-  { node: null,tag: 'SH8-14A-101-20-DS', type: 'Spring Hanger',     qty: 1 },
-];
+export const SPECIAL_SUPPORTS = [];
 
-export const NOZZLE_LOADS = [
-  { equipment: 'V-307C',   description: 'Future Feed Gas Compressor Inlet Drum',    status: 'PASS', note: 'Typical to existing V-307A/B' },
-  { equipment: 'C-301C',   description: 'Future Feed Gas Compressor',               status: 'PASS', note: 'Qualified for 3× API 617' },
-  { equipment: 'AE-301C',  description: 'Aftercooler',                              status: 'PASS', note: 'Qualified for 3× API 661' },
-  { equipment: 'SLUG',     description: 'Slug catcher connection',                   status: 'PASS', note: '—' },
-];
+export const NOZZLE_LOADS = [];
 
 export const FLANGE_DATA = [
   { location: 'System flanges', method: 'Equivalent Pressure Method', standard: 'ASME SEC III DIV1, NC 3658.3', status: 'PASS' },
 ];
 
-export const REFERENCES = [
-  { docNo: '08572-TRHT-SP-PI-00-OO-208', title: 'Piping Stress Analysis Specification' },
-  { docNo: '08572-TRHT-SP-PI-00-OO-209', title: 'Piping Supports Specification' },
-  { docNo: '08572-TRHT-LL-PI-00-OO-201', title: 'Stress Critical Line List' },
-  { docNo: '08572-TRHT-SP-PI-00-OO-204', title: 'Piping Material Specification' },
-  { docNo: 'ASME B31.3 - 2016',          title: 'Process Piping' },
-];
+export const REFERENCES = [];
 
-export const ASSUMPTIONS = [
-  'Control valve weights: UCV-805 = 1.5× 10" 600# ball valve',
-  'Future Feed Gas Compressor (C-301C): pipe supports per existing compressor isometrics; thermal growth calculated with suction nozzle fixed; qualified for 3× API 617',
-  'Aftercooler (AE-301C): qualified for 3× API 661',
-  'Future Feed Gas Compressor Inlet Drum (V-307C): typical to existing inlet drum V-307A/B; nozzles qualified per stress specification',
-];
+export const ASSUMPTIONS = [];
 
-export const NOTES = [
-  'Friction coefficient for +Y restraint removed at nodes 360 & 4050 for convergence',
-  'SYS-177 lines captured from Process Line List (Rev.-4) pending Critical Line List update',
-];
+export const NOTES = [];
 
 export const CONCLUSIONS = [
   'STRESSES ARE WITHIN CODE ALLOWABLE LIMITS',

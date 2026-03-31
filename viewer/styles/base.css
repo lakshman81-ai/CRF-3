@@ -280,6 +280,13 @@ body {
 }
 .toggle-label input[type="checkbox"]:checked::after { left: 18px; }
 
+/* Section disabled logic via toggle */
+.disabled-section {
+  color: var(--color-muted);
+  pointer-events: none;
+  opacity: 0.5;
+}
+
 /* Scope rows */
 .scope-list { display: flex; flex-direction: column; gap: 10px; margin: 8px 0; }
 .scope-row  {

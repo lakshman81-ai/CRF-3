@@ -318,14 +318,10 @@ export function goToTab(tabId) { _switchTab(tabId); }
 /** Prepare stress report: validate + switch to Summary */
 export function prepareReport() {
   const parsed = state.parsed;
-  if (!parsed || !parsed.elements?.length) {
-    alert('No parsed data — please load an .ACCDB file first.');
-    return;
-  }
   _switchTab('summary');
   // Flash "report ready" status
   const status = document.getElementById('app-status');
-  if (status) {
+  if (status && parsed && parsed.elements?.length) {
     status.textContent = `Report ready — ${parsed.elements.length} elements | ${parsed.format} format | ${parsed.validation?.status ?? 'OK'}`;
     status.className = 'status-ok';
   }
@@ -334,19 +330,162 @@ export function prepareReport() {
 // ── Print ──────────────────────────────────────────────────────────────────
 
 function _wirePrint() {
-  document.getElementById('print-btn')?.addEventListener('click', _doPrint);
+  document.getElementById('print-btn')?.addEventListener('click', _showPrintModal);
+  document.getElementById('print-modal-cancel')?.addEventListener('click', _hidePrintModal);
+  document.getElementById('print-modal-confirm')?.addEventListener('click', _doPrint);
+}
+
+const _printSections = [];
+
+function _showPrintModal() {
+  const modal = document.getElementById('print-modal');
+  const list = document.getElementById('print-modal-list');
+  if (!modal || !list) return;
+
+  _printSections.length = 0;
+  let html = '';
+
+  // Get all visible tabs except debug
+  const activeTabs = TABS.filter(t => t.id !== 'debug' && document.querySelector(`.tab-btn[data-tab="${t.id}"]`)?.style.display !== 'none');
+
+  // We need to render all tabs temporarily to grab their sections,
+  // but it's easier to maintain state. We will map tab renderers to offscreen divs.
+  const tempWrap = document.createElement('div');
+
+  activeTabs.forEach((tab, index) => {
+    const tabContainer = document.createElement('div');
+    tab.render(tabContainer);
+
+    // Find all sections in this tab
+    // We treat top-level blocks or headings as sections.
+    const h3s = Array.from(tabContainer.querySelectorAll('h3.section-heading'));
+
+    html += `<div style="margin-bottom: 10px;">
+      <label style="font-weight:bold; cursor:pointer;">
+        <input type="checkbox" checked class="print-tab-toggle" data-idx="${index}"> ${tab.label}
+      </label>
+      <div style="margin-left:20px; margin-top:5px; display:flex; flex-direction:column; gap:4px;">`;
+
+    h3s.forEach((h3, subIndex) => {
+      // Create a unique id to identify this heading later
+      const uid = `print-sect-${tab.id}-${subIndex}`;
+      // In the actual DOM, we'll find the heading by text content, or inject data-attributes
+      _printSections.push({ tabId: tab.id, headingText: h3.textContent, uid });
+
+      html += `<label style="font-size:12px; cursor:pointer;">
+        <input type="checkbox" checked class="print-sect-toggle" data-tab-idx="${index}" data-uid="${uid}"> ${h3.textContent}
+      </label>`;
+    });
+
+    html += `</div></div>`;
+  });
+
+  list.innerHTML = html;
+
+  // Wire modal logic
+  list.querySelectorAll('.print-tab-toggle').forEach(tabChk => {
+    tabChk.addEventListener('change', (e) => {
+      const isChecked = e.target.checked;
+      const idx = e.target.dataset.idx;
+      list.querySelectorAll(`.print-sect-toggle[data-tab-idx="${idx}"]`).forEach(sectChk => {
+        sectChk.checked = isChecked;
+      });
+    });
+  });
+
+  list.querySelectorAll('.print-sect-toggle').forEach(sectChk => {
+    sectChk.addEventListener('change', (e) => {
+      const idx = e.target.dataset.tabIdx;
+      const allSect = Array.from(list.querySelectorAll(`.print-sect-toggle[data-tab-idx="${idx}"]`));
+      const tabChk = list.querySelector(`.print-tab-toggle[data-idx="${idx}"]`);
+      if (allSect.some(chk => chk.checked)) {
+        tabChk.checked = true;
+      } else {
+        tabChk.checked = false;
+      }
+    });
+  });
+
+  modal.style.display = 'flex';
+}
+
+function _hidePrintModal() {
+  const modal = document.getElementById('print-modal');
+  if (modal) modal.style.display = 'none';
 }
 
 function _doPrint() {
-  // Inject geometry canvas as a print-only image
+  _hidePrintModal();
+
+  // 1. Gather unchecked items
+  const uncheckedUids = new Set(
+    Array.from(document.querySelectorAll('.print-sect-toggle:not(:checked)'))
+         .map(chk => chk.dataset.uid)
+  );
+
+  const uncheckedTabs = new Set(
+    Array.from(document.querySelectorAll('.print-tab-toggle:not(:checked)'))
+         .map(chk => TABS.filter(t => t.id !== 'debug')[parseInt(chk.dataset.idx)].id)
+  );
+
+  // Inject geometry canvas as a print-only image BEFORE rendering all tabs
   const geoCanvas = document.querySelector('#canvas-wrap canvas');
-  const printGeo  = document.getElementById('print-geo-img');
-  if (geoCanvas && printGeo) {
+  let dataUrl = null;
+  if (geoCanvas) {
     try {
-      printGeo.src = geoCanvas.toDataURL('image/png');
-      printGeo.style.display = 'block';
+      dataUrl = geoCanvas.toDataURL('image/png');
     } catch { /* CORS or no canvas yet */ }
   }
 
+  // To print ALL tabs seamlessly, we must render them all into the DOM.
+  // We'll append them to #tab-content temporarily.
+  const content = document.getElementById('tab-content');
+  const originalHtml = content.innerHTML;
+  const originalTabId = state.activeTab;
+
+  content.innerHTML = '';
+
+  const activeTabs = TABS.filter(t => t.id !== 'debug' && document.querySelector(`.tab-btn[data-tab="${t.id}"]`)?.style.display !== 'none');
+
+  activeTabs.forEach(tab => {
+    const tabDiv = document.createElement('div');
+    if (uncheckedTabs.has(tab.id)) {
+      tabDiv.classList.add('print-hidden');
+    }
+    tab.render(tabDiv);
+
+    // hide specific sections
+    const h3s = Array.from(tabDiv.querySelectorAll('h3.section-heading'));
+    h3s.forEach((h3, idx) => {
+      const uid = `print-sect-${tab.id}-${idx}`;
+      if (uncheckedUids.has(uid)) {
+        // Find everything from this h3 up to the next h3 (or end of tab)
+        h3.classList.add('print-hidden');
+        let next = h3.nextElementSibling;
+        while (next && !next.matches('h3.section-heading')) {
+          next.classList.add('print-hidden');
+          next = next.nextElementSibling;
+        }
+      }
+    });
+
+    content.appendChild(tabDiv);
+  });
+
+  // Re-inject image now that Geometry tab might have been rendered
+  const printGeo = document.getElementById('print-geo-img');
+  if (printGeo && dataUrl) {
+    printGeo.src = dataUrl;
+    printGeo.style.display = 'block';
+  } else if (printGeo) {
+    printGeo.style.display = 'none';
+  }
+
+  // Execute print
   window.print();
+
+  // Restore DOM
+  if (printGeo) printGeo.style.display = 'none';
+  content.innerHTML = originalHtml;
+  _switchTab(originalTabId);
 }

@@ -41,15 +41,15 @@ export class IsometricRenderer {
     this._scene = new THREE.Scene();
     this._scene.background = new THREE.Color(0xffffff);
 
+    // Use larger frustum for PCF Fixer style orthographic camera
     const aspect = w / h;
-    const frustum = 1.5;
+    const frustum = 5000;
     this._camera = new THREE.OrthographicCamera(
       -frustum * aspect, frustum * aspect,
       frustum, -frustum,
-      0.01, 1000
+      -50000, 50000
     );
-    const D = 5;
-    this._camera.position.set(D, D, D);
+    this._camera.position.set(5000, 5000, 5000);
     this._camera.lookAt(0, 0, 0);
 
     this._renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
@@ -65,15 +65,163 @@ export class IsometricRenderer {
 
     this._controls = new OrbitControls(this._camera, this._renderer.domElement);
     this._controls.enableDamping = true;
-    this._controls.dampingFactor = 0.05;
-    this._controls.screenSpacePanning = true;
+    this._controls.dampingFactor = 0.1;
+    this._controls.addEventListener('change', () => {
+      if (this._pipeGroup) {
+        const box = new THREE.Box3().setFromObject(this._pipeGroup);
+        if (!box.isEmpty()) {
+            const sz = box.getSize(new THREE.Vector3());
+            const maxDim = Math.max(sz.x, sz.y, sz.z, 1);
+            this._camera.near = -maxDim * 20;
+            this._camera.far = maxDim * 20;
+            this._camera.updateProjectionMatrix();
+        }
+      }
+    });
 
     this._scene.add(this._pipeGroup, this._symbolGroup, this._labelGroup);
 
     const ro = new ResizeObserver(() => this._onResize());
     ro.observe(this._container);
 
+    this._buildViewCube();
+    this._buildAxisGizmo();
+
     this._animate();
+  }
+
+  _buildViewCube() {
+    let cube = document.getElementById('pcf-view-cube');
+    if (cube) return;
+    const size = 90;
+    cube = document.createElement('div');
+    cube.id = 'pcf-view-cube';
+    cube.style.cssText = `
+        position:absolute;top:12px;right:12px;width:${size}px;height:${size}px;
+        perspective:200px;cursor:pointer;user-select:none;z-index:10;
+    `;
+    const inner = document.createElement('div');
+    inner.style.cssText = `
+        width:100%;height:100%;position:relative;transform-style:preserve-3d;
+        transition:transform 0.05s linear;
+    `;
+    const half = size / 2;
+    const FACES = [
+        { label: 'Top', rot: 'rotateX(-90deg)', bg: '#3b6ea5', cam: [0, 1, 0], up: [0, 0, -1] },
+        { label: 'Bot', rot: 'rotateX(90deg)', bg: '#2b5285', cam: [0, -1, 0], up: [0, 0, 1] },
+        { label: 'Front', rot: 'translateZ(' + half + 'px)', bg: '#4a7c95', cam: [0, 0, 1], up: [0, 1, 0] },
+        { label: 'Back', rot: 'rotateY(180deg) translateZ(' + half + 'px)', bg: '#4a7c95', cam: [0, 0, -1], up: [0, 1, 0] },
+        { label: 'Right', rot: 'rotateY(90deg) translateZ(' + half + 'px)', bg: '#3a6e85', cam: [1, 0, 0], up: [0, 1, 0] },
+        { label: 'Left', rot: 'rotateY(-90deg) translateZ(' + half + 'px)', bg: '#3a6e85', cam: [-1, 0, 0], up: [0, 1, 0] },
+    ];
+    for (const f of FACES) {
+        const face = document.createElement('div');
+        face.textContent = f.label;
+        face.style.cssText = `
+            position:absolute;width:${size}px;height:${size}px;
+            display:flex;align-items:center;justify-content:center;
+            font-size:11px;font-weight:700;color:#fff;background:${f.bg}cc;
+            border:1px solid #ffffff33;box-sizing:border-box;
+            transform:${f.rot};
+            backface-visibility:visible;
+        `;
+        face.addEventListener('click', () => this._snapCamera(f.cam, f.up));
+        inner.appendChild(face);
+    }
+    const cornerPositions = [
+        { style: 'top:-8px;right:-8px', cam: [1, 1, -1], up: [0, 1, 0] },
+        { style: 'top:-8px;left:-8px', cam: [-1, 1, -1], up: [0, 1, 0] },
+        { style: 'bottom:-8px;right:-8px', cam: [1, -1, 1], up: [0, 1, 0] },
+        { style: 'bottom:-8px;left:-8px', cam: [-1, -1, 1], up: [0, 1, 0] },
+    ];
+    for (const cp of cornerPositions) {
+        const corner = document.createElement('div');
+        corner.title = 'ISO view';
+        corner.style.cssText = `
+            position:absolute;${cp.style};width:16px;height:16px;
+            background:#ffffff22;border:1px solid #ffffff55;border-radius:50%;
+            cursor:pointer;z-index:12;display:flex;align-items:center;justify-content:center;
+            font-size:8px;color:#fff;
+        `;
+        corner.textContent = '◆';
+        corner.addEventListener('click', (e) => { e.stopPropagation(); this._snapCamera(cp.cam, cp.up); });
+        cube.appendChild(corner);
+    }
+    this._viewCubeInner = inner;
+    if (getComputedStyle(this._container).position === 'static') {
+        this._container.style.position = 'relative';
+    }
+    cube.appendChild(inner);
+    this._viewCubeEl = cube;
+    this._container.appendChild(cube);
+  }
+
+  _buildAxisGizmo() {
+    let container = document.getElementById('pcf-axis-gizmo');
+    if (container) return;
+    container = document.createElement('div');
+    container.id = 'pcf-axis-gizmo';
+    container.style.cssText = `
+        position:absolute;bottom:12px;right:12px;width:80px;height:80px;
+        z-index:10;pointer-events:none;
+    `;
+    const canvas = document.createElement('canvas');
+    canvas.width = 80; canvas.height = 80;
+    container.appendChild(canvas);
+    this._gizmoEl = container;
+    this._container.appendChild(container);
+    this._axisGizmoCtx = canvas.getContext('2d');
+  }
+
+  _snapCamera([cx, cy, cz], [ux, uy, uz]) {
+    if (!this._controls) return;
+    const box = new THREE.Box3();
+    if (this._pipeGroup) box.setFromObject(this._pipeGroup);
+    const centre = box.isEmpty() ? new THREE.Vector3() : box.getCenter(new THREE.Vector3());
+    const size = box.isEmpty() ? 5000 : Math.max(...box.getSize(new THREE.Vector3()).toArray()) * 1.5;
+    this._camera.position.set(
+        centre.x + cx * size,
+        centre.y + cy * size,
+        centre.z + cz * size
+    );
+    this._camera.up.set(ux, uy, uz);
+    this._camera.lookAt(centre);
+    this._camera.updateProjectionMatrix();
+    this._controls.target.copy(centre);
+    this._controls.update();
+  }
+
+  _syncViewCube() {
+    if (!this._viewCubeInner || !this._camera) return;
+    const q = this._camera.quaternion;
+    this._viewCubeInner.style.transform =
+        `matrix3d(${new THREE.Matrix4().makeRotationFromQuaternion(q.clone().invert()).elements.join(',')})`;
+  }
+
+  _syncAxisGizmo() {
+    const ctx = this._axisGizmoCtx;
+    if (!ctx || !this._camera) return;
+    const W = 80, H = 80, cx = W / 2, cy = H / 2, len = 28;
+    ctx.clearRect(0, 0, W, H);
+    const axes = [
+        { dir: new THREE.Vector3(1, 0, 0), color: '#ff4444', label: 'X' },
+        { dir: new THREE.Vector3(0, 1, 0), color: '#44cc44', label: 'Y' },
+        { dir: new THREE.Vector3(0, 0, 1), color: '#4488ff', label: 'Z' },
+    ];
+    for (const { dir, color, label } of axes) {
+        const proj = dir.clone().applyQuaternion(this._camera.quaternion);
+        const ex = cx + proj.x * len;
+        const ey = cy - proj.y * len;
+        ctx.strokeStyle = color;
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(cx, cy);
+        ctx.lineTo(ex, ey);
+        ctx.stroke();
+        ctx.fillStyle = color;
+        ctx.font = 'bold 10px sans-serif';
+        ctx.fillText(label, ex + (ex > cx ? 2 : -10), ey + (ey > cy ? 10 : -2));
+    }
   }
 
   _animate() {
@@ -81,6 +229,8 @@ export class IsometricRenderer {
     this._controls.update();
     this._renderer.render(this._scene, this._camera);
     this._css2d.render(this._scene, this._camera);
+    this._syncViewCube();
+    this._syncAxisGizmo();
   }
 
   _onResize() {
@@ -88,7 +238,17 @@ export class IsometricRenderer {
     const h = this._container.clientHeight;
     if (!w || !h) return;
     const aspect = w / h;
-    const frustum = 1.5;
+
+    // Scale frustum dynamically based on current zoom / scene size
+    let frustum = 5000;
+    if (this._pipeGroup) {
+      const box = new THREE.Box3().setFromObject(this._pipeGroup);
+      if (!box.isEmpty()) {
+         const size = box.getSize(new THREE.Vector3());
+         frustum = Math.max(size.x, size.y, size.z) * 0.8;
+      }
+    }
+
     this._camera.left   = -frustum * aspect;
     this._camera.right  =  frustum * aspect;
     this._camera.top    =  frustum;
@@ -242,17 +402,43 @@ export class IsometricRenderer {
         }).join('');
       } else {
         // OD-based swatches (pipelineRef / T1 / T2 / P1 all use OD colouring by default)
-        const uniqueODs = [...new Set(elements.map(e => e.od))].filter(v => v > 0);
+        // Group by value, limit repeats to 1/10th min 3
+        const uniqueValues = [...new Set(elements.map(e => e.od))].filter(v => v > 0);
         swatches = OD_COLORS
-          .filter(c => uniqueODs.some(od => Math.abs(od - c.od) < 1))
+          .filter(c => uniqueValues.some(od => Math.abs(od - c.od) < 1))
           .map(c => `<div class="legend-row"><span class="legend-swatch" style="background:#${c.color.toString(16).padStart(6,'0')}"></span><span>${c.label}</span></div>`)
           .join('');
         if (!swatches) {
           swatches = `<div class="legend-row"><span class="legend-swatch" style="background:#444"></span><span>Pipe</span></div>`;
         }
+
+        // Pick random points for discrete legend items
+        const maxRepeats = Math.max(3, Math.floor(elements.length / 10));
+        const valMap = {};
+        for (const el of elements) {
+          const val = legendField === 'pipelineRef' ? el.od : (legendField === 'material' ? el.material : el[legendField]);
+          if (!valMap[val]) valMap[val] = [];
+          if (valMap[val].length < maxRepeats && Math.random() > 0.5) {
+             valMap[val].push(el);
+          }
+        }
+
+        // Render discrete text labels randomly using computeStretches or directly
+        for (const val in valMap) {
+          const repeats = valMap[val];
+          for (const el of repeats) {
+            const mid = new THREE.Vector3().addVectors(el.fromPos, el.toPos).multiplyScalar(0.5);
+            // using existing createSegmentLabel but adapted for arbitrary points
+            // Assuming createSegmentLabel expects (text, midPos)
+            // But from labels.js createSegmentLabel uses SCALE
+            // So we pass mid manually
+            const lbl = createSegmentLabel(String(val), mid);
+            this._labelGroup.add(lbl);
+          }
+        }
       }
 
-      const titles = { pipelineRef:'Pipeline Ref', material:'Material', T1:'T1 (\u00b0C)', T2:'T2 (\u00b0C)', P1:'P1 (bar)' };
+      const titles = { pipelineRef:'Legends', material:'Material', T1:'T1 (\u00b0C)', T2:'T2 (\u00b0C)', P1:'P1 (bar)' };
       panel.innerHTML = `
         <div class="legend-title">${titles[legendField] || 'Legend'}</div>
         ${swatches}
