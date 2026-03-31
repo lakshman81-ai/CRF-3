@@ -1,0 +1,166 @@
+/**
+ * summary-tab.js — Cover page with scope toggles.
+ */
+
+import { META, SCOPE_ITEMS, REFERENCES, ASSUMPTIONS, NOTES, SPECIAL_SUPPORTS, NOZZLE_LOADS } from '../data/report-data.js';
+import { state } from '../core/state.js';
+import { emit } from '../core/event-bus.js';
+import { computeOperatingConditions } from '../utils/max-finder.js';
+
+export function renderSummary(container) {
+  const opCond = computeOperatingConditions(state.parsed);
+  
+  const sysLabel = state.parsed?.meta?.jobName || META.system;
+  
+  // Render editable lists or fallback
+  const renderList = (key, defaultArr, isEditable) => {
+    const list = state.sticky[key] && state.sticky[key].length > 0 ? state.sticky[key] : defaultArr;
+    return list.map((item, i) => `
+      <li ${isEditable ? 'contenteditable="true" class="editable-field list-edit"' : ''} data-key="${key}" data-idx="${i}">
+        ${typeof item === 'object' && item.title ? `<span class="mono">${item.docNo}</span> - ${item.title}` : item}
+      </li>
+    `).join('');
+  };
+
+  container.innerHTML = `
+    <div class="report-section" id="section-summary">
+      <div class="report-header-block">
+        <div class="report-header-left">
+          <div class="report-title">${META.title.toUpperCase()}</div>
+          <div class="report-subtitle editable-field" contenteditable="true" spellcheck="false" data-key="project">${state.sticky.project || META.project}</div>
+          <div class="report-subtitle editable-field" contenteditable="true" spellcheck="false" data-key="facility">${state.sticky.facility || META.facility}</div>
+        </div>
+        <div class="report-header-right">
+          <table class="meta-table">
+            <tr><td>Doc No.</td><td><span class="editable-field docno-field ${state.sticky.docNoInitialized ? '' : 'uninitialized'}" contenteditable="true" spellcheck="false" data-key="docNo">${state.sticky.docNo || META.docNumber}</span></td></tr>
+            <tr><td>Revision</td><td><span class="editable-field" contenteditable="true" spellcheck="false" data-key="revision">${state.sticky.revision || META.revision}</span></td></tr>
+            <tr><td>Proj No.</td><td><span class="editable-field" contenteditable="true" spellcheck="false" data-key="projNumber">${state.sticky.projNumber || META.projNumber}</span></td></tr>
+            <tr><td>System</td><td><span class="editable-field" contenteditable="true" spellcheck="false" data-key="system">${state.sticky.system || sysLabel}</span></td></tr>
+            <tr><td>Code</td><td>${state.sticky.code || META.designCode}</td></tr>
+            <tr><td>Software</td><td>${META.software}</td></tr>
+          </table>
+        </div>
+      </div>
+
+      <h3 class="section-heading">Basis — Maximum Values</h3>
+      <table class="data-table params-table">
+        <thead><tr><th>Param</th><th>Value</th><th>Description</th></tr></thead>
+        <tbody>
+          <tr><td class="param-key">T1</td><td class="editable-field" contenteditable="true">${opCond ? opCond.T1.toFixed(0) : '—'} °C</td><td>Max Design Temperature</td></tr>
+          <tr><td class="param-key">T2</td><td class="editable-field" contenteditable="true">${opCond ? opCond.T2.toFixed(1) : '—'} °C</td><td>Normal Operating Temperature</td></tr>
+          <tr><td class="param-key">T3</td><td class="editable-field" contenteditable="true">${opCond ? opCond.T3.toFixed(1) : '—'} °C</td><td>Min Design Temperature</td></tr>
+          <tr><td class="param-key">P1</td><td class="editable-field" contenteditable="true">${opCond ? opCond.P1.toFixed(2) : '—'} bar</td><td>Design Pressure</td></tr>
+          <tr><td class="param-key">plantLife</td><td class="editable-field" contenteditable="true">25 years</td><td>Plant Life</td></tr>
+          <tr><td class="param-key">operatingHrs</td><td class="editable-field" contenteditable="true">7000 hrs</td><td>Operating Hours</td></tr>
+          <tr><td class="param-key">maxDeflect</td><td class="editable-field" contenteditable="true">10 mm</td><td>Max Sustained Vertical Mid-span Deflection</td></tr>
+        </tbody>
+      </table>
+
+      <h3 class="section-heading">Scope</h3>
+      <div class="scope-list" id="scope-list">
+        ${SCOPE_ITEMS.map(item => _scopeRow(item, state.scopeToggles[item.id])).join('')}
+      </div>
+
+      <h3 class="section-heading" style="margin-top:2rem">Reference Documents</h3>
+      <ul class="conclusion-list">
+        ${renderList('references', REFERENCES, true)}
+      </ul>
+
+      <h3 class="section-heading" style="margin-top:2rem">Assumptions & Notes</h3>
+      <ol class="assumption-list note-field ${state.sticky.notesInitialized ? '' : 'uninitialized'}" id="notes-list">
+        ${renderList('assumptions', [...ASSUMPTIONS, ...NOTES], true)}
+      </ol>
+
+      <h3 class="section-heading" style="margin-top:2rem">Special Support List</h3>
+      <table class="data-table" id="table-special-supports">
+        <thead><tr><th>Node</th><th>Tag</th><th>Type</th><th>Qty</th></tr></thead>
+        <tbody>
+          ${SPECIAL_SUPPORTS.map(s => `<tr><td contenteditable="true" class="editable-field center">${s.node || '—'}</td><td contenteditable="true" class="editable-field">${s.tag}</td><td contenteditable="true" class="editable-field">${s.type}</td><td class="center editable-field" contenteditable="true">${s.qty}</td></tr>`).join('')}
+        </tbody>
+      </table>
+    </div>
+  `;
+
+  // Wire toggle events
+  container.querySelectorAll('.scope-toggle').forEach(btn => {
+    btn.addEventListener('change', (e) => {
+      const id = e.target.dataset.id;
+      state.scopeToggles[id] = e.target.checked;
+      const row = container.querySelector(`.scope-row[data-id="${id}"]`);
+      _updateScopeRow(row, e.target.checked);
+      emit('scope-changed', { id, value: e.target.checked });
+    });
+  });
+
+  // Wire simple text edits
+  container.querySelectorAll('.editable-field').forEach(f => {
+    f.addEventListener('blur', () => {
+      const key = f.dataset.key;
+      if (key) {
+        state.sticky[key] = f.textContent.trim();
+        if (key === 'docNo') {
+          state.sticky.docNoInitialized = true;
+          f.classList.remove('uninitialized');
+          emit('docno-changed', state.sticky.docNo);
+        }
+        import('../core/state.js').then(m => m.saveStickyState());
+      }
+    });
+  });
+  
+  // Notes color logic
+  const notesList = container.querySelector('#notes-list');
+  if (notesList) {
+    notesList.addEventListener('input', () => {
+       if (!state.sticky.notesInitialized) {
+         state.sticky.notesInitialized = true;
+         notesList.classList.remove('uninitialized');
+         import('../core/state.js').then(m => m.saveStickyState());
+       }
+    });
+  }
+
+  // List edits
+  container.querySelectorAll('.list-edit').forEach(li => {
+    li.addEventListener('blur', () => {
+      const key = li.dataset.key;
+      const idx = li.dataset.idx;
+      if (key && idx !== undefined) {
+         if (!state.sticky[key] || state.sticky[key].length === 0) {
+            // copy defaults if this is the first edit
+            const defaults = key === 'references' ? REFERENCES : [...ASSUMPTIONS, ...NOTES];
+            state.sticky[key] = defaults.map(d => typeof d === 'object'? `<span class="mono">${d.docNo}</span> - ${d.title}` : d);
+         }
+         state.sticky[key][idx] = li.innerHTML.trim();
+         import('../core/state.js').then(m => m.saveStickyState());
+      }
+    });
+  });
+}
+
+function _scopeRow(item, checked) {
+  return `
+    <div class="scope-row" data-id="${item.id}">
+      <label class="toggle-label">
+        <input type="checkbox" class="scope-toggle" data-id="${item.id}" ${checked ? 'checked' : ''}>
+        <span class="toggle-track"></span>
+      </label>
+      <span class="scope-label">${item.label}</span>
+      <span class="scope-conclusion editable-field ${checked ? 'visible' : 'hidden'}" contenteditable="true" spellcheck="false" data-key="scope_${item.id}">
+        &rarr; ${state.sticky['scope_'+item.id] || item.conclusion} <span class="badge-pass" contenteditable="false">✓</span>
+      </span>
+    </div>
+  `;
+}
+
+function _updateScopeRow(row, checked) {
+  const conc = row.querySelector('.scope-conclusion');
+  if (checked) {
+    conc.classList.remove('hidden');
+    conc.classList.add('visible');
+  } else {
+    conc.classList.remove('visible');
+    conc.classList.add('hidden');
+  }
+}
+

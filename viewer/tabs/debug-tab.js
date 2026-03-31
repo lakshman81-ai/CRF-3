@@ -1,0 +1,300 @@
+/**
+ * debug-tab.js — Rich parser log, report population summary, computation details,
+ *                validation errors, and raw parsed JSON viewer.
+ */
+
+import { state } from '../core/state.js';
+import { on } from '../core/event-bus.js';
+
+let _listenersRegistered = false;
+
+export function renderDebug(container) {
+  if (!_listenersRegistered) {
+    on('parse-complete', () => {
+      const c = document.getElementById('tab-content');
+      if (state.activeTab === 'debug' && c) _render(c);
+    });
+    on('file-loaded', () => {
+      const c = document.getElementById('tab-content');
+      if (state.activeTab === 'debug' && c) _render(c);
+    });
+    _listenersRegistered = true;
+  }
+  _render(container);
+}
+
+function _render(container) {
+  const log    = state.log    ?? [];
+  const errors = state.errors ?? [];
+  const parsed = state.parsed;
+
+  container.innerHTML = `
+    <div class="report-section debug-tab" id="section-debug">
+      <h3 class="section-heading">Debug — Parser &amp; Report Population</h3>
+
+      ${parsed ? _reportSummaryCard(parsed) : _noFileCard()}
+
+      <!-- Parser Log -->
+      <div class="debug-section-header">
+        <h4 class="sub-heading" style="margin:0">Parser Log
+          <span class="badge badge-neutral">${log.length} entries</span>
+        </h4>
+        <label class="debug-filter-label">Filter:
+          <select id="log-filter">
+            <option value="ALL">ALL</option>
+            <option value="OK">OK</option>
+            <option value="INFO">INFO</option>
+            <option value="WARN">WARN</option>
+            <option value="ERROR">ERROR</option>
+          </select>
+        </label>
+      </div>
+      <div class="log-box" id="log-box">
+        ${log.length
+          ? log.map(e => `<div class="log-entry log-${(e.level||'INFO').toLowerCase()}">
+              <span class="log-level">[${e.level ?? 'INFO'}]</span>
+              <span class="log-msg">${_esc(e.msg ?? '')}</span>
+            </div>`).join('')
+          : '<div class="log-entry log-info"><span class="log-level">[INFO]</span><span class="log-msg">No file loaded yet.</span></div>'
+        }
+      </div>
+
+      <!-- Validation Errors -->
+      <h4 class="sub-heading" style="margin-top:1.5rem">Validation Errors / Warnings
+        <span class="badge ${errors.length ? 'badge-error' : 'badge-ok'}">${errors.length || 'none'}</span>
+      </h4>
+      <div class="log-box">
+        ${errors.length
+          ? errors.map(e => `<div class="log-entry log-${(e.level||'ERROR').toLowerCase()}">
+              <span class="log-level">[${e.level ?? 'ERROR'}]</span>
+              <span class="log-msg">${_esc(e.msg ?? '')}</span>
+            </div>`).join('')
+          : '<div class="log-entry log-ok"><span class="log-level">[OK]</span><span class="log-msg">No validation errors or warnings — file parsed cleanly.</span></div>'
+        }
+      </div>
+
+      <!-- Computation Details -->
+      ${parsed ? _computationDetails(parsed) : ''}
+
+      <!-- Raw JSON viewer -->
+      ${parsed ? `
+        <h4 class="sub-heading" style="margin-top:1.5rem">Raw Parsed Data</h4>
+        <div class="debug-controls">
+          <label>Section:
+            <select id="json-section-select">
+              <option value="elements">elements (${parsed.elements?.length ?? 0})</option>
+              <option value="nodes">nodes (${Object.keys(parsed.nodes ?? {}).length})</option>
+              <option value="bends">bends (${parsed.bends?.length ?? 0})</option>
+              <option value="restraints">restraints (${parsed.restraints?.length ?? 0})</option>
+              <option value="forces">forces (${parsed.forces?.length ?? 0})</option>
+              <option value="rigids">rigids (${parsed.rigids?.length ?? 0})</option>
+              <option value="units">units</option>
+              <option value="meta">meta</option>
+              <option value="validation">validation</option>
+            </select>
+          </label>
+        </div>
+        <pre class="json-box" id="json-box">${_jsonSection(parsed, 'elements')}</pre>
+      ` : '<p class="tab-note">Load a file to see raw data.</p>'}
+
+    </div>
+  `;
+
+  // Wire log filter
+  container.querySelector('#log-filter')?.addEventListener('change', e => {
+    const filter = e.target.value;
+    container.querySelectorAll('#log-box .log-entry').forEach(el => {
+      const level = [...el.classList].find(c => c.startsWith('log-'))?.replace('log-', '').toUpperCase();
+      el.style.display = (filter === 'ALL' || level === filter) ? '' : 'none';
+    });
+  });
+
+  // Wire JSON section select
+  container.querySelector('#json-section-select')?.addEventListener('change', e => {
+    const jsonBox = container.querySelector('#json-box');
+    if (jsonBox && parsed) jsonBox.textContent = _jsonSection(parsed, e.target.value);
+  });
+}
+
+// ── Report population summary card ────────────────────────────────────────────
+
+function _noFileCard() {
+  return `
+    <div class="debug-summary-card debug-empty">
+      <span class="debug-empty-icon">📂</span>
+      <span>No file loaded — drag &amp; drop an .ACCDB file or use the <strong>Input Data</strong> tab to load one.</span>
+    </div>`;
+}
+
+function _reportSummaryCard(parsed) {
+  const elCount  = parsed.elements?.length  ?? 0;
+  const ndCount  = Object.keys(parsed.nodes ?? {}).length;
+  const bdCount  = parsed.bends?.length     ?? 0;
+  const rsCount  = parsed.restraints?.length ?? 0;
+  const foCount  = parsed.forces?.length    ?? 0;
+  const riCount  = parsed.rigids?.length    ?? 0;
+  const fmt      = parsed.format ?? '—';
+  const fileName = state.fileName ?? '—';
+  const valStatus = parsed.validation?.status ?? 'OK';
+  const valSummary = parsed.validation?.summary ?? '';
+
+  const rows = [
+    { tab: 'Input Data',   section: 'Pipe Properties table',    source: 'PARSED',  count: elCount,  ok: elCount > 0,  detail: `${elCount} element(s) from ${fmt === 'XML' ? '<PIPINGELEMENT>' : '#$ ELEMENTS'} section` },
+    { tab: 'Input Data',   section: 'Applied Loads picker',     source: 'PARSED',  count: foCount,  ok: true,         detail: foCount > 0 ? `${foCount} node(s) from ${fmt === 'XML' ? 'XML FORCES' : '#$ FORCMNT'} section` : 'No force/moment loads in file' },
+    { tab: 'Input Data',   section: 'Basis — Heaviest Rigid',   source: 'PARSED',  count: riCount,  ok: true,         detail: riCount > 0 ? `${riCount} rigid(s) from ${fmt === 'XML' ? '<RIGID>' : '#$ RIGID'} section` : 'No rigid elements in file' },
+    { tab: 'Input Data',   section: 'Basis — Longest Span',     source: 'PARSED',  count: elCount,  ok: elCount > 0,  detail: `Computed as max(√(dx²+dy²+dz²)) across ${elCount} elements` },
+    { tab: 'Input Data',   section: 'Basis — Max Stress/Disp',  source: 'STATIC',  count: null,     ok: true,         detail: 'From static PDF report data (report-data.js)' },
+    { tab: 'Geometry',     section: '3D Isometric Viewport',    source: 'PARSED',  count: ndCount,  ok: elCount > 0,  detail: `${ndCount} nodes, ${bdCount} bends, ${rsCount} restraint(s) — Three.js OrthographicCamera at (1,1,1)` },
+    { tab: 'Stress',       section: 'Stress Compliance table',  source: 'STATIC',  count: null,     ok: true,         detail: 'From static PDF report data (STRESS_TABLE in report-data.js)' },
+    { tab: 'Stress',       section: 'Displacement table',       source: 'STATIC',  count: null,     ok: true,         detail: 'From static PDF report data (DISPLACEMENT_TABLE in report-data.js)' },
+    { tab: 'Supports',     section: 'Special Supports list',    source: 'STATIC',  count: null,     ok: true,         detail: 'From static PDF report data (SPECIAL_SUPPORTS in report-data.js)' },
+    { tab: 'Nozzle',       section: 'Nozzle Loads table',       source: 'STATIC',  count: null,     ok: true,         detail: 'From static PDF report data (NOZZLE_LOADS in report-data.js)' },
+    { tab: 'Flanges',      section: 'Flange Leakage check',     source: 'STATIC',  count: null,     ok: true,         detail: 'From static PDF report data (FLANGE_DATA in report-data.js)' },
+    { tab: 'Summary',      section: 'Scope toggles + conclusions', source: 'STATIC', count: null,   ok: true,         detail: 'From static PDF report data (SCOPE_ITEMS in report-data.js)' },
+    { tab: 'Summary',      section: 'Design parameters block',  source: 'STATIC',  count: null,     ok: true,         detail: 'From static PDF report data (DESIGN_PARAMS in report-data.js)' },
+  ];
+
+  const statusClass = { OK: 'badge-ok', WARN: 'badge-warn', ERROR: 'badge-error', INFO: 'badge-neutral' }[valStatus] ?? 'badge-neutral';
+
+  return `
+    <div class="debug-summary-card">
+      <div class="debug-summary-header">
+        <div>
+          <strong>${_esc(fileName)}</strong>
+          <span class="badge badge-neutral" style="margin-left:0.5rem">${fmt}</span>
+          <span class="badge ${statusClass}" style="margin-left:0.25rem">${valStatus}: ${_esc(valSummary)}</span>
+        </div>
+        <div class="debug-summary-counts">
+          ${_countBadge(elCount, 'elements')}
+          ${_countBadge(ndCount, 'nodes')}
+          ${bdCount ? _countBadge(bdCount, 'bends') : ''}
+          ${rsCount ? _countBadge(rsCount, 'restraints') : ''}
+          ${foCount ? _countBadge(foCount, 'force nodes') : ''}
+          ${riCount ? _countBadge(riCount, 'rigids') : ''}
+        </div>
+      </div>
+
+      <h4 class="sub-heading" style="margin:1rem 0 0.5rem">Report Tab Population</h4>
+      <table class="data-table debug-pop-table">
+        <thead>
+          <tr>
+            <th>Tab</th>
+            <th>Section</th>
+            <th>Source</th>
+            <th>Status</th>
+            <th>How it was computed / where it came from</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${rows.map(r => `
+            <tr>
+              <td><span class="debug-tab-badge">${r.tab}</span></td>
+              <td>${r.section}</td>
+              <td><span class="badge ${r.source === 'PARSED' ? 'badge-parsed' : 'badge-static'}">${r.source}</span></td>
+              <td>${r.ok
+                ? '<span class="status-ok-inline">✓ OK</span>'
+                : '<span class="status-warn-inline">⚠ empty</span>'
+              }</td>
+              <td class="debug-detail">${r.detail}${r.count !== null ? ` <span class="muted">(${r.count})</span>` : ''}</td>
+            </tr>
+          `).join('')}
+        </tbody>
+      </table>
+    </div>`;
+}
+
+// ── Computation details panel ──────────────────────────────────────────────────
+
+function _computationDetails(parsed) {
+  const fmt = parsed.format ?? 'NEUTRAL';
+  const els = parsed.elements ?? [];
+
+  if (!els.length) return '';
+
+  const sample = els[0];
+  const sampleProps = fmt === 'XML'
+    ? [
+        ['FROM_NODE attribute',     sample.from,     'Node number'],
+        ['TO_NODE attribute',       sample.to,       'Node number'],
+        ['DELTA_X / Y / Z',         `${sample.dx?.toFixed(1)}, ${sample.dy?.toFixed(1)}, ${sample.dz?.toFixed(1)}`, 'mm — element run vector'],
+        ['DIAMETER attribute',      sample.od?.toFixed(3), 'mm — outer diameter'],
+        ['WALL_THICK attribute',    sample.wall?.toFixed(3), 'mm'],
+        ['INSUL_THICK attribute',   sample.insul?.toFixed(1), 'mm'],
+        ['TEMP_EXP_C1 (T1)',        sample.T1?.toFixed(1), '°C — operating temperature'],
+        ['PRESSURE1 (P1)',          sample.P1?.toFixed(2), 'bar'],
+        ['PIPE_DENSITY',            sample.density ? (sample.density * 1e6).toFixed(0) : '—', 'kg/m³ (stored as kg/cm³, ×1e6)'],
+        ['MATERIAL_NAME',           sample.material || 'CS (default)', ''],
+        ['Sentinel −1.0101',        'if |val − (−1.0101)| < 0.001', '→ treated as "not set", fallback used'],
+      ]
+    : [
+        ['Row 1, col 0',    sample.from,     'FROM node ID (integer, 1–99999)'],
+        ['Row 1, col 1',    sample.to,       'TO node ID'],
+        ['Row 1, cols 2–4', `${sample.dx?.toFixed(1)}, ${sample.dy?.toFixed(1)}, ${sample.dz?.toFixed(1)}`, 'DX, DY, DZ (mm)'],
+        ['Row 1, col 5',    sample.od?.toFixed(3), 'OD (mm) — must be > 10 to pass isElemRow()'],
+        ['Row 2, col 0',    sample.wall?.toFixed(3), 'Wall thickness (mm)'],
+        ['Row 2, col 1',    sample.insul?.toFixed(1), 'Insulation (mm)'],
+        ['Row 2, col 3',    sample.T1?.toFixed(1), 'T1 — operating temperature (°C)'],
+        ['Row 2, col 4',    sample.T2?.toFixed(1), 'T2 — 2nd temperature case (°C)'],
+        ['Row 4, col 0',    sample.P1?.toFixed(2), 'P1 — operating pressure (bar); 9999.99 → 0'],
+        ['Material',        sample.material || 'CS', 'Default CS (A106 Gr. B) — neutral file uses material code section, not per-element'],
+        ['Density',         sample.density ? (sample.density * 1e6).toFixed(0) + ' kg/m³' : '—', 'Default 7833 kg/m³ (7.833e−3 kg/cm³) for CS'],
+      ];
+
+  const uniqueODs = [...new Set(els.map(e => e.od?.toFixed(1)))].filter(v => parseFloat(v) > 0).sort((a, b) => b - a);
+  const T1s = els.map(e => e.T1).filter(Boolean);
+  const P1s = els.map(e => e.P1).filter(Boolean);
+  const longestEl = els.reduce((a, b) => (b.length ?? 0) > (a.length ?? 0) ? b : a, els[0]);
+
+  return `
+    <h4 class="sub-heading" style="margin-top:1.5rem">Computation Details — First Element (index 0)</h4>
+    <p class="tab-note" style="margin-bottom:0.5rem">
+      Format: <strong>${fmt}</strong> &nbsp;|&nbsp;
+      ${fmt === 'XML'
+        ? 'Each <code>&lt;PIPINGELEMENT&gt;</code> XML attribute maps to the fields below.'
+        : 'Each element block = Row 1 (geom) + Rows 2–9 (material/temp/press). Rows indexed from <code>props[]</code> array (0-based after Row 1).'}
+    </p>
+    <table class="data-table debug-prop-table">
+      <thead><tr><th>Source field</th><th>Value (element 0)</th><th>Meaning</th></tr></thead>
+      <tbody>
+        ${sampleProps.map(([src, val, meaning]) => `
+          <tr>
+            <td class="mono">${_esc(String(src))}</td>
+            <td class="mono">${_esc(val === undefined || val === null ? '—' : String(val))}</td>
+            <td class="debug-detail">${_esc(meaning)}</td>
+          </tr>`).join('')}
+      </tbody>
+    </table>
+
+    <h4 class="sub-heading" style="margin-top:1rem">Dataset Summary</h4>
+    <table class="data-table debug-prop-table">
+      <thead><tr><th>Property</th><th>Values found</th></tr></thead>
+      <tbody>
+        <tr><td>OD sizes (mm)</td><td class="mono">${uniqueODs.join(', ') || '—'}</td></tr>
+        <tr><td>T1 range (°C)</td><td class="mono">${T1s.length ? Math.min(...T1s).toFixed(0) + ' – ' + Math.max(...T1s).toFixed(0) : '—'}</td></tr>
+        <tr><td>P1 range (bar)</td><td class="mono">${P1s.length ? Math.min(...P1s).toFixed(2) + ' – ' + Math.max(...P1s).toFixed(2) : '—'}</td></tr>
+        <tr><td>Longest span</td><td class="mono">${longestEl ? `${longestEl.from} → ${longestEl.to} = ${longestEl.length?.toFixed(1)} mm` : '—'}</td></tr>
+        <tr><td>Coordinate origin</td><td class="mono">Node ${els[0]?.from ?? '?'} = (0, 0, 0) mm</td></tr>
+        <tr><td>Node positions</td><td class="mono">Accumulated from cumulative DX/DY/DZ walk</td></tr>
+      </tbody>
+    </table>`;
+}
+
+// ── Helpers ────────────────────────────────────────────────────────────────────
+
+function _countBadge(n, label) {
+  return `<span class="badge badge-neutral"><strong>${n}</strong> ${label}</span>`;
+}
+
+function _jsonSection(parsed, section) {
+  const data = parsed[section];
+  if (data === undefined) return '(not available)';
+  try {
+    return JSON.stringify(data, null, 2);
+  } catch {
+    return String(data);
+  }
+}
+
+function _esc(s) {
+  return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}

@@ -1,0 +1,126 @@
+/**
+ * max-finder.js — Compute basis-of-maximum values from parsed CAESAR II data.
+ * Returns a summary object used by the Input Data tab BASIS card.
+ */
+
+import { pipeLength } from './formatter.js';
+import { STRESS_TABLE, DISPLACEMENT_TABLE } from '../data/report-data.js';
+
+/**
+ * Compute max values from both static report data and live parsed data.
+ * @param {object|null} parsed  — output of caesar-parser.js, may be null
+ * @returns {object}
+ */
+export function computeMaxValues(parsed) {
+  const result = {
+    maxStress: null,
+    maxDisplacement: null,
+    longestSpan: null,
+    heaviestRigid: null,
+    maxAppliedForce: null,
+  };
+
+  // Max stress — from static report data
+  if (STRESS_TABLE.length) {
+    const row = [...STRESS_TABLE].sort((a, b) => b.ratio - a.ratio)[0];
+    result.maxStress = {
+      node: row.node,
+      value: row.calc,
+      unit: 'MPa',
+      loadCase: row.loadCase,
+    };
+  }
+
+  // Max displacement — from static report data
+  if (DISPLACEMENT_TABLE.length) {
+    let maxRow = null, maxVal = 0;
+    for (const row of DISPLACEMENT_TABLE) {
+      const vals = [Math.abs(row.dx), Math.abs(row.dy), Math.abs(row.dz)];
+      const m = Math.max(...vals);
+      if (m > maxVal) { maxVal = m; maxRow = row; }
+    }
+    if (maxRow) {
+      const dir = Math.abs(maxRow.dy) >= Math.abs(maxRow.dx) && Math.abs(maxRow.dy) >= Math.abs(maxRow.dz)
+        ? 'DY' : Math.abs(maxRow.dx) >= Math.abs(maxRow.dz) ? 'DX' : 'DZ';
+      result.maxDisplacement = {
+        node: maxRow.node,
+        value: maxVal,
+        dir,
+        unit: 'mm',
+        loadCase: maxRow.loadCase,
+      };
+    }
+  }
+
+  if (!parsed) return result;
+
+  // Longest span — from parsed elements
+  if (parsed.elements?.length) {
+    let longest = null, longestLen = 0;
+    for (const el of parsed.elements) {
+      const len = pipeLength(el.dx ?? 0, el.dy ?? 0, el.dz ?? 0);
+      if (len > longestLen) {
+        longestLen = len;
+        longest = el;
+      }
+    }
+    if (longest) {
+      result.longestSpan = {
+        from: longest.from,
+        to: longest.to,
+        length: longestLen,
+        unit: 'mm',
+      };
+    }
+  }
+
+  // Heaviest rigid — from parsed rigid elements
+  if (parsed.rigids?.length) {
+    const heaviest = [...parsed.rigids].sort((a, b) => b.mass - a.mass)[0];
+    result.heaviestRigid = {
+      node: heaviest.node ?? heaviest.from,
+      mass: heaviest.mass,
+      unit: 'kg',
+    };
+  }
+
+  // Max applied force magnitude
+  if (parsed.forces?.length) {
+    let maxForce = null, maxMag = 0;
+    for (const f of parsed.forces) {
+      const mag = Math.sqrt((f.fx ** 2) + (f.fy ** 2) + (f.fz ** 2));
+      if (mag > maxMag) { maxMag = mag; maxForce = f; }
+    }
+    if (maxForce) {
+      result.maxAppliedForce = {
+        node: maxForce.node,
+        fx: maxForce.fx,
+        fy: maxForce.fy,
+        fz: maxForce.fz,
+        magnitude: maxMag,
+        unit: 'N',
+      };
+    }
+  }
+
+  return result;
+}
+
+export function computeOperatingConditions(parsed) {
+  if (!parsed || !parsed.elements?.length) return null;
+  let maxEl = null;
+  let maxT1 = -Infinity;
+  for (const el of parsed.elements) {
+    if (el.T1 !== undefined && el.T1 > maxT1) {
+      maxT1 = el.T1;
+      maxEl = el;
+    }
+  }
+  if (!maxEl) return null;
+  return {
+    T1: maxEl.T1 ?? 0,
+    T2: maxEl.T2 ?? 0,
+    T3: maxEl.T3 ?? 0,
+    P1: maxEl.P1 ?? 0,
+  };
+}

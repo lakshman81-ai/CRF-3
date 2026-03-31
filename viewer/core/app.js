@@ -1,0 +1,352 @@
+/**
+ * app.js — Tab router and file loading (drag-drop + file picker).
+ */
+
+import { state, resetParsedState } from './state.js';
+import { emit, on } from './event-bus.js';
+import { parse } from '../parser/caesar-parser.js';
+import { renderSummary }  from '../tabs/summary-tab.js';
+import { renderInput }    from '../tabs/input-tab.js';
+import { renderGeometry } from '../tabs/geometry-tab.js';
+import { renderStress }   from '../tabs/stress-tab.js';
+import { renderSupports } from '../tabs/supports-tab.js';
+import { renderNozzle }   from '../tabs/nozzle-tab.js';
+import { renderDebug }    from '../tabs/debug-tab.js';
+
+const TABS = [
+  { id: 'input',     label: 'Input Data',  render: renderInput    },
+  { id: 'geometry',  label: 'Geometry',    render: renderGeometry },
+  { id: 'summary',   label: 'Summary',     render: renderSummary  },
+  { id: 'stress',    label: 'Stress',      render: renderStress   },
+  { id: 'supports',  label: 'Supports',    render: renderSupports },
+  { id: 'nozzle',    label: 'Nozzle',      render: renderNozzle   },
+  { id: 'debug',     label: 'Debug',       render: renderDebug    },
+];
+
+let _activeRenderer = null;
+
+/** Bootstrap the app — called from index.html */
+export function init() {
+  import('./state.js').then(m => m.loadStickyState()).then(() => {
+    _wireHeader();
+    _buildTabBar();
+    _switchTab('input');
+    _wirePrint();
+    _wireFileLoad();
+  });
+}
+
+function _wireHeader() {
+  const fields = document.querySelectorAll('.editable-field');
+  fields.forEach(f => {
+    const key = f.dataset.key;
+    if (state.sticky[key]) f.textContent = state.sticky[key];
+    
+    if (key === 'docNo' && state.sticky.docNoInitialized !== true) {
+       f.classList.add('uninitialized');
+    } else if (key === 'docNo') {
+       f.classList.remove('uninitialized');
+    }
+
+    f.addEventListener('blur', () => {
+      state.sticky[key] = f.textContent.trim();
+      import('./state.js').then(m => m.saveStickyState());
+      if (key === 'docNo') {
+         state.sticky.docNoInitialized = true;
+         f.classList.remove('uninitialized');
+         emit('docno-changed', state.sticky.docNo);
+      }
+    });
+  });
+
+  on('docno-changed', val => {
+    const docF = document.getElementById('hdr-docno');
+    if (docF && docF.textContent !== val) {
+      docF.textContent = val;
+      docF.classList.remove('uninitialized');
+    }
+  });
+
+  on('parse-complete', (result) => {
+    const sysF = document.getElementById('hdr-system');
+    if (sysF && result.meta?.jobName) {
+      sysF.textContent = result.meta.jobName;
+    }
+    // Also docno reset color on new file
+    const docF = document.getElementById('hdr-docno');
+    if (docF) {
+      docF.classList.add('uninitialized');
+      state.sticky.docNoInitialized = false;
+      import('./state.js').then(m => m.saveStickyState());
+    }
+  });
+  
+  // Scope toggles affecting tabs
+  on('scope-changed', ({ id, value }) => {
+    _updateTabVisibility();
+  });
+}
+
+function _updateTabVisibility() {
+  // mapping from scope IDs to tab IDs
+  const tabScopes = { nozzle: 'nozzle', support: 'supports', flange: 'nozzle' };
+  document.querySelectorAll('.tab-btn').forEach(btn => {
+    const tid = btn.dataset.tab;
+    // Check if any scope linked to this tab is ON
+    let visible = true;
+    for (const [scopeId, tabIdMatch] of Object.entries(tabScopes)) {
+      if (tid === tabIdMatch && state.scopeToggles[scopeId] === false) {
+        visible = false;
+      }
+    }
+    // Exception: flange and nozzle are on the same tab now. If either is true, show it.
+    if (tid === 'nozzle') {
+      visible = state.scopeToggles['nozzle'] || state.scopeToggles['flange'];
+    }
+    btn.style.display = visible ? '' : 'none';
+  });
+}
+
+// ── Tab bar ────────────────────────────────────────────────────────────────
+
+function _buildTabBar() {
+  const bar = document.getElementById('tab-bar');
+  if (!bar) return;
+  bar.innerHTML = TABS.map(t =>
+    `<button class="tab-btn" data-tab="${t.id}">${t.label}</button>`
+  ).join('');
+  bar.addEventListener('click', e => {
+    const btn = e.target.closest('.tab-btn');
+    if (btn) _switchTab(btn.dataset.tab);
+  });
+}
+
+function _switchTab(tabId) {
+  state.activeTab = tabId;
+  const content = document.getElementById('tab-content');
+  if (!content) return;
+
+  // Update active button
+  document.querySelectorAll('.tab-btn').forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.tab === tabId);
+  });
+  _updateTabVisibility();
+
+  // Render tab
+  const tab = TABS.find(t => t.id === tabId);
+  if (!tab) return;
+  tab.render(content);
+
+  emit('tab-changed', tabId);
+}
+
+// ── File loading ───────────────────────────────────────────────────────────
+
+function _wireFileLoad() {
+  // Drag-and-drop on entire page
+  document.addEventListener('dragover', e => e.preventDefault());
+  document.addEventListener('drop', e => {
+    e.preventDefault();
+    const file = e.dataTransfer?.files[0];
+    if (file) _loadFile(file);
+  });
+
+  // Events from tabs
+  on('file-dropped', file => _loadFile(file));
+}
+
+function _loadFile(file) {
+  const status = document.getElementById('app-status');
+  if (status) { status.textContent = `Loading: ${file.name} …`; status.className = 'status-loading'; }
+
+  // Read as ArrayBuffer so we can handle both text and binary ACCDB files.
+  const reader = new FileReader();
+  reader.onload = e => {
+    const buf  = e.target.result;
+    // Decode as UTF-8; {fatal:false} replaces bad bytes rather than throwing.
+    const text = new TextDecoder('utf-8', { fatal: false }).decode(buf);
+    // Binary ACCDB: contains null bytes — route to the MDB parser.
+    if (text.includes('\u0000')) {
+      _processBinaryAccdb(buf, file.name);
+    } else {
+      _processText(text, file.name);
+    }
+  };
+  reader.onerror = () => {
+    if (status) { status.textContent = `Failed to read: ${file.name}`; status.className = 'status-error'; }
+  };
+  reader.readAsArrayBuffer(file);
+}
+
+async function _processBinaryAccdb(arrayBuffer, fileName) {
+  const status = document.getElementById('app-status');
+  if (status) { status.textContent = `Reading Access database: ${fileName} …`; status.className = 'status-loading'; }
+
+  resetParsedState();
+  state.fileName = fileName;
+
+  const log    = [];
+  const errors = [];
+  log.push({ level: 'INFO', msg: `File loaded: "${fileName}" | ${(arrayBuffer.byteLength / 1024).toFixed(0)} KB | Binary Access database` });
+
+  let result;
+  try {
+    const { parseBinaryAccdb } = await import('../parser/accdb-mdb.js');
+    const accdb = await parseBinaryAccdb(arrayBuffer, fileName, log);
+
+    if (accdb?.embeddedText) {
+      // Embedded CAESAR II neutral/XML text found inside a table column — parse normally.
+      log.push({ level: 'INFO', msg: 'Handing embedded text to CAESAR II text parser…' });
+      const textResult = parse(accdb.embeddedText, fileName);
+      if (accdb.jobName) textResult.meta.jobName = accdb.jobName;
+      if (accdb.flanges) textResult.flanges = accdb.flanges;
+      result = { ...textResult, log: [...log, ...textResult.log] };
+
+    } else if (accdb?.elements?.length > 0) {
+      // Structured table extraction succeeded.
+      const { validateElements, summarise } = await import('../parser/validator.js');
+      const elVal = validateElements(accdb.elements, accdb.nodes);
+      for (const e of elVal.errors)   errors.push(e);
+      for (const w of elVal.warnings) log.push(w);
+      const validation = summarise([], elVal.errors, elVal.warnings);
+      result = {
+        elements:    accdb.elements,
+        nodes:       accdb.nodes,
+        bends:       accdb.bends       ?? [],
+        restraints:  accdb.restraints  ?? [],
+        forces:      accdb.forces      ?? [],
+        rigids:      accdb.rigids      ?? [],
+        flanges:     accdb.flanges     ?? [],
+        units:       accdb.units       ?? {},
+        meta:        accdb.meta        ?? {},
+        format:      accdb.format      ?? 'ACCDB-TABLE',
+        log, errors, validation,
+      };
+
+    } else {
+      // Unrecognised schema — surface everything in the Debug tab.
+      errors.push({ level: 'ERROR', msg: 'No CAESAR II pipe data could be extracted from this Access database.' });
+      errors.push({ level: 'INFO',  msg: 'Export from CAESAR II: File → Neutral File → select all sections → save, then load that file here.' });
+      result = {
+        elements: [], nodes: {}, bends: [], restraints: [], forces: [], rigids: [],
+        units: {}, meta: {}, format: 'ACCDB-BINARY', log, errors,
+        validation: { status: 'ERROR', summary: 'Binary ACCDB — schema not recognised' },
+      };
+    }
+  } catch (err) {
+    console.error('_processBinaryAccdb threw:', err);
+    errors.push({ level: 'ERROR', msg: `Binary ACCDB exception: ${err.message}` });
+    result = {
+      elements: [], nodes: {}, bends: [], restraints: [], forces: [], rigids: [],
+      units: {}, meta: {}, format: 'ACCDB-BINARY', log, errors,
+      validation: { status: 'ERROR', summary: `Exception: ${err.message}` },
+    };
+  }
+
+  state.parsed = result;
+  state.log    = result.log;
+  state.errors = result.errors;
+
+  const elCount   = result.elements?.length ?? 0;
+  const nodeCount = Object.keys(result.nodes ?? {}).length;
+  const errCount  = result.errors?.length   ?? 0;
+
+  if (status) {
+    status.textContent = `${fileName} — ${elCount} elements, ${nodeCount} nodes${errCount ? `, ${errCount} error(s)` : ''}`;
+    status.className   = errCount ? 'status-error' : 'status-ok';
+  }
+
+  emit('file-loaded',    { fileName });
+  emit('parse-complete', result);
+
+  const tab     = TABS.find(t => t.id === state.activeTab);
+  const content = document.getElementById('tab-content');
+  if (tab && content) tab.render(content);
+}
+
+function _processText(rawText, fileName) {
+  resetParsedState();
+  state.rawText  = rawText;
+  state.fileName = fileName;
+  emit('file-loaded', { rawText, fileName });
+
+  let result;
+  try {
+    result = parse(rawText, fileName);
+  } catch (err) {
+    console.error('parse() threw:', err);
+    const status = document.getElementById('app-status');
+    if (status) {
+      status.textContent = `Parse error: ${err.message} — check console for details`;
+      status.className = 'status-error';
+    }
+    // Still push a minimal parsed state so the UI doesn't show "No file loaded"
+    result = {
+      elements: [], nodes: {}, bends: [], restraints: [], forces: [], rigids: [],
+      units: {}, meta: {}, format: 'ERROR',
+      log: [{ level: 'ERROR', msg: `Unhandled parse exception: ${err.message}` }],
+      errors: [{ level: 'ERROR', msg: `Unhandled parse exception: ${err.message}` }],
+      validation: { status: 'ERROR', summary: `Parse exception: ${err.message}` },
+    };
+  }
+
+  state.parsed = result;
+  state.log    = result.log;
+  state.errors = result.errors;
+
+  const elCount   = result.elements?.length ?? 0;
+  const nodeCount = Object.keys(result.nodes ?? {}).length;
+  const errCount  = result.errors?.length ?? 0;
+
+  const status = document.getElementById('app-status');
+  if (status) {
+    status.textContent = `${fileName} — ${elCount} elements, ${nodeCount} nodes${errCount ? `, ${errCount} error(s)` : ''}`;
+    status.className = errCount ? 'status-error' : 'status-ok';
+  }
+
+  emit('parse-complete', result);
+
+  // Always re-render active tab to reflect new data
+  const tab = TABS.find(t => t.id === state.activeTab);
+  const content = document.getElementById('tab-content');
+  if (tab && content) tab.render(content);
+}
+
+/** Navigate to a tab programmatically */
+export function goToTab(tabId) { _switchTab(tabId); }
+
+/** Prepare stress report: validate + switch to Summary */
+export function prepareReport() {
+  const parsed = state.parsed;
+  if (!parsed || !parsed.elements?.length) {
+    alert('No parsed data — please load an .ACCDB file first.');
+    return;
+  }
+  _switchTab('summary');
+  // Flash "report ready" status
+  const status = document.getElementById('app-status');
+  if (status) {
+    status.textContent = `Report ready — ${parsed.elements.length} elements | ${parsed.format} format | ${parsed.validation?.status ?? 'OK'}`;
+    status.className = 'status-ok';
+  }
+}
+
+// ── Print ──────────────────────────────────────────────────────────────────
+
+function _wirePrint() {
+  document.getElementById('print-btn')?.addEventListener('click', _doPrint);
+}
+
+function _doPrint() {
+  // Inject geometry canvas as a print-only image
+  const geoCanvas = document.querySelector('#canvas-wrap canvas');
+  const printGeo  = document.getElementById('print-geo-img');
+  if (geoCanvas && printGeo) {
+    try {
+      printGeo.src = geoCanvas.toDataURL('image/png');
+      printGeo.style.display = 'block';
+    } catch { /* CORS or no canvas yet */ }
+  }
+
+  window.print();
+}
