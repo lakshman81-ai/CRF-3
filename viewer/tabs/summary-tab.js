@@ -184,15 +184,92 @@ export function renderSummary(container) {
 }
 
 function _scopeRow(item, checked) {
+  const parsed = state.parsed;
+  let dynamicConclusion = item.conclusion;
+  let statusBadge = '<span class="badge-pass" contenteditable="false">✓</span>';
+  let isComputed = false;
+
+  if (parsed && checked) {
+    if (item.id === 'code') {
+      if (parsed.stresses?.length) {
+        isComputed = true;
+        const failedStresses = parsed.stresses.filter(s => s.status === 'FAIL' && !s.loadCase.toUpperCase().includes('HYD'));
+        if (failedStresses.length > 0) {
+          dynamicConclusion = `CODE STRESS EXCEEDED AT ${failedStresses.length} NODE(S)`;
+          statusBadge = '<span class="badge-fail" contenteditable="false">✗</span>';
+        } else {
+          dynamicConclusion = 'STRESSES WITHIN CODE ALLOWABLE LIMITS';
+        }
+      } else {
+        dynamicConclusion = '';
+        statusBadge = '';
+      }
+    } else if (item.id === 'hydro') {
+      if (parsed.stresses?.length) {
+        isComputed = true;
+        const hydroStresses = parsed.stresses.filter(s => s.loadCase.toUpperCase().includes('HYD'));
+        if (hydroStresses.length === 0) {
+          dynamicConclusion = 'NO HYDRO TEST CASES FOUND';
+          statusBadge = '<span class="badge-warn" contenteditable="false">!</span>';
+        } else {
+           const failedHydro = hydroStresses.filter(s => s.status === 'FAIL');
+           if (failedHydro.length > 0) {
+              dynamicConclusion = `HYDRO TEST STRESS EXCEEDED AT ${failedHydro.length} NODE(S)`;
+              statusBadge = '<span class="badge-fail" contenteditable="false">✗</span>';
+           } else {
+              dynamicConclusion = 'HYDRO TEST STRESS WITHIN LIMITS';
+           }
+        }
+      } else {
+        dynamicConclusion = '';
+        statusBadge = '';
+      }
+    } else if (item.id === 'flange') {
+       if (parsed.flanges?.length) {
+         isComputed = true;
+         const failedFlanges = parsed.flanges.filter(f => f.status === 'FAIL');
+         if (failedFlanges.length > 0) {
+             dynamicConclusion = `FLANGE LEAKAGE CHECK FAILED AT ${failedFlanges.length} NODE(S)`;
+             statusBadge = '<span class="badge-fail" contenteditable="false">✗</span>';
+         } else {
+             dynamicConclusion = 'FLANGE LEAKAGE CHECK PASSED';
+         }
+       } else {
+         dynamicConclusion = '';
+         statusBadge = '';
+       }
+    } else if (item.id === 'support') {
+       if (parsed.displacements?.length) {
+         isComputed = true;
+         const limit = 10; // 10mm hard limit for now
+         const overDeflected = parsed.displacements.filter(d => Math.abs(d.dy || 0) > limit || Math.abs(d.dx || 0) > limit || Math.abs(d.dz || 0) > limit);
+         if (overDeflected.length > 0) {
+             dynamicConclusion = `DEFLECTIONS EXCEED ${limit}MM LIMIT`;
+             statusBadge = '<span class="badge-warn" contenteditable="false">!</span>';
+         } else {
+             dynamicConclusion = 'SUSTAINED SAG WITHIN THE LIMIT';
+         }
+       } else {
+         dynamicConclusion = '';
+         statusBadge = '';
+       }
+    }
+  }
+
+  const finalConclusion = state.sticky['scope_'+item.id] !== undefined ? state.sticky['scope_'+item.id] : dynamicConclusion;
+
+  // Don't show the arrow if conclusion is empty
+  const arrow = finalConclusion ? '&rarr;' : '';
+
   return `
     <div class="scope-row" data-id="${item.id}">
       <label class="toggle-label">
         <input type="checkbox" class="scope-toggle" data-id="${item.id}" ${checked ? 'checked' : ''}>
         <span class="toggle-track"></span>
       </label>
-      <span class="scope-label">${item.label}</span>
+      <span class="scope-label">${item.label} ${isComputed ? '<span class="badge badge-ok" style="font-size:0.6em; padding:1px 4px; margin-left:4px;">COMPUTED</span>' : ''}</span>
       <span class="scope-conclusion editable-field ${checked ? 'visible' : 'hidden'}" contenteditable="true" spellcheck="false" data-key="scope_${item.id}">
-        &rarr; ${state.sticky['scope_'+item.id] || item.conclusion} <span class="badge-pass" contenteditable="false">✓</span>
+        ${arrow} ${finalConclusion} ${statusBadge}
       </span>
     </div>
   `;

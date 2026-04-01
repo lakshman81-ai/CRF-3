@@ -197,9 +197,14 @@ async function _processBinaryAccdb(arrayBuffer, fileName) {
     if (accdb?.embeddedText) {
       // Embedded CAESAR II neutral/XML text found inside a table column — parse normally.
       log.push({ level: 'INFO', msg: 'Handing embedded text to CAESAR II text parser…' });
+      globalThis.__tempParsedAccdbPayload = accdb;
       const textResult = parse(accdb.embeddedText, fileName);
+      globalThis.__tempParsedAccdbPayload = null;
+
       if (accdb.jobName) textResult.meta.jobName = accdb.jobName;
       if (accdb.flanges) textResult.flanges = accdb.flanges;
+      if (accdb.stresses) textResult.stresses = accdb.stresses;
+      if (accdb.displacements) textResult.displacements = accdb.displacements;
       result = { ...textResult, log: [...log, ...textResult.log] };
 
     } else if (accdb?.elements?.length > 0) {
@@ -210,16 +215,18 @@ async function _processBinaryAccdb(arrayBuffer, fileName) {
       for (const w of elVal.warnings) log.push(w);
       const validation = summarise([], elVal.errors, elVal.warnings);
       result = {
-        elements:    accdb.elements,
-        nodes:       accdb.nodes,
-        bends:       accdb.bends       ?? [],
-        restraints:  accdb.restraints  ?? [],
-        forces:      accdb.forces      ?? [],
-        rigids:      accdb.rigids      ?? [],
-        flanges:     accdb.flanges     ?? [],
-        units:       accdb.units       ?? {},
-        meta:        accdb.meta        ?? {},
-        format:      accdb.format      ?? 'ACCDB-TABLE',
+        elements:      accdb.elements,
+        nodes:         accdb.nodes,
+        bends:         accdb.bends         ?? [],
+        restraints:    accdb.restraints    ?? [],
+        forces:        accdb.forces        ?? [],
+        rigids:        accdb.rigids        ?? [],
+        flanges:       accdb.flanges       ?? [],
+        stresses:      accdb.stresses      ?? [],
+        displacements: accdb.displacements ?? [],
+        units:         accdb.units         ?? {},
+        meta:          accdb.meta          ?? {},
+        format:        accdb.format        ?? 'ACCDB-TABLE',
         log, errors, validation,
       };
 

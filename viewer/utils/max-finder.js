@@ -20,28 +20,31 @@ export function computeMaxValues(parsed) {
     maxAppliedForce: null,
   };
 
-  // Max stress — from static report data
-  if (STRESS_TABLE.length) {
-    const row = [...STRESS_TABLE].sort((a, b) => b.ratio - a.ratio)[0];
+  const stresses = parsed?.stresses?.length ? parsed.stresses : STRESS_TABLE;
+  const displacements = parsed?.displacements?.length ? parsed.displacements : DISPLACEMENT_TABLE;
+
+  // Max stress — from parsed or static data
+  if (stresses.length) {
+    const row = [...stresses].sort((a, b) => b.ratio - a.ratio)[0];
     result.maxStress = {
       node: row.node,
       value: row.calc,
-      unit: 'MPa',
+      unit: parsed?.stresses?.length ? 'KPa' : 'MPa',
       loadCase: row.loadCase,
     };
   }
 
-  // Max displacement — from static report data
-  if (DISPLACEMENT_TABLE.length) {
+  // Max displacement — from parsed or static data
+  if (displacements.length) {
     let maxRow = null, maxVal = 0;
-    for (const row of DISPLACEMENT_TABLE) {
-      const vals = [Math.abs(row.dx), Math.abs(row.dy), Math.abs(row.dz)];
+    for (const row of displacements) {
+      const vals = [Math.abs(row.dx || 0), Math.abs(row.dy || 0), Math.abs(row.dz || 0)];
       const m = Math.max(...vals);
       if (m > maxVal) { maxVal = m; maxRow = row; }
     }
     if (maxRow) {
-      const dir = Math.abs(maxRow.dy) >= Math.abs(maxRow.dx) && Math.abs(maxRow.dy) >= Math.abs(maxRow.dz)
-        ? 'DY' : Math.abs(maxRow.dx) >= Math.abs(maxRow.dz) ? 'DX' : 'DZ';
+      const dir = Math.abs(maxRow.dy || 0) >= Math.abs(maxRow.dx || 0) && Math.abs(maxRow.dy || 0) >= Math.abs(maxRow.dz || 0)
+        ? 'DY' : Math.abs(maxRow.dx || 0) >= Math.abs(maxRow.dz || 0) ? 'DX' : 'DZ';
       result.maxDisplacement = {
         node: maxRow.node,
         value: maxVal,

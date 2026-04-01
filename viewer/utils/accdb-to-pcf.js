@@ -48,7 +48,7 @@ export function buildUniversalCSV(parsed) {
 
       // Pointers
       BEND_PTR: el.bendPtr || 0,
-      REST_PTR: el.restraintPtr || 0,
+      REST_PTR: el.restPtr || el.restraintPtr || 0,
       RIGID_PTR: el.rigidPtr || 0,
       INT_PTR: el.sifPtr || 0,
       FLANGE_PTR: el.flangePtr || 0,
@@ -91,7 +91,12 @@ export function buildUniversalCSV(parsed) {
 
 // ── Stage 2: Universal CSV to PCF Data Table ─────────────────────────────────
 
-export function normalizeToPCF(csvRows) {
+export function normalizeToPCF(csvRows, options = {}) {
+  const method = options.method || 'default';
+  if (method === 'ContEngineMethod') {
+    return normalizeToPCFWithContinuity(csvRows, options);
+  }
+
   const segments = [];
   let i = 0;
 
@@ -176,6 +181,194 @@ export function normalizeToPCF(csvRows) {
   }
 
   return segments;
+}
+
+function _classifyComponent(row) {
+  if (row.INT_PTR > 0) return 'TEE';
+  if (row.REDUCER_PTR > 0) return 'REDUCER-CONCENTRIC';
+  if (row.BEND_PTR > 0) return 'BEND';
+  if (row.RIGID_PTR > 0) return row.FLANGE_PTR > 0 ? 'FLANGE' : 'VALVE';
+  return 'PIPE';
+}
+
+function _supportNameFromType(type = '') {
+  const t = String(type).toUpperCase();
+  if (t.includes('ANCHOR')) return 'ANC';
+  if (t.includes('GUIDE') || t.includes('+Y')) return 'GDE';
+  return 'RST';
+}
+
+function _fmtCoord(v, decimals) {
+  return Number(v ?? 0).toFixed(decimals);
+}
+
+function _msgDirection(dx, dy, dz) {
+  const ax = Math.abs(dx ?? 0);
+  const ay = Math.abs(dy ?? 0);
+  const az = Math.abs(dz ?? 0);
+  if (ax >= ay && ax >= az) return (dx ?? 0) >= 0 ? 'EAST' : 'WEST';
+  if (ay >= ax && ay >= az) return (dy ?? 0) >= 0 ? 'NORTH' : 'SOUTH';
+  return (dz ?? 0) >= 0 ? 'UP' : 'DOWN';
+}
+
+function _coordOrFallback(pt) {
+  if (!pt) return { x: 1, y: 0, z: 0 };
+  if ((pt.x ?? 0) === 0 && (pt.y ?? 0) === 0 && (pt.z ?? 0) === 0) return { x: 1, y: 0, z: 0 };
+  return pt;
+}
+
+export function normalizeToPCFWithContinuity(csvRows, options = {}) {
+  if (!Array.isArray(csvRows) || !csvRows.length) return [];
+
+  const nodePos = new Map();
+  const first = csvRows[0];
+  nodePos.set(first.FROM_NODE, { x: 1, y: 0, z: 0 }); // avoid (0,0,0)
+
+  // Resolve node positions from FROM/TO + deltas using iterative continuity pass.
+  let progress = true;
+  let guard = 0;
+  while (progress && guard < csvRows.length * 4) {
+    guard += 1;
+    progress = false;
+    for (const r of csvRows) {
+      const a = nodePos.get(r.FROM_NODE);
+      const b = nodePos.get(r.TO_NODE);
+      const dx = Number(r.DELTA_X || 0);
+      const dy = Number(r.DELTA_Y || 0);
+      const dz = Number(r.DELTA_Z || 0);
+      if (a && !b) {
+        nodePos.set(r.TO_NODE, { x: a.x + dx, y: a.y + dy, z: a.z + dz });
+        progress = true;
+      } else if (!a && b) {
+        nodePos.set(r.FROM_NODE, { x: b.x - dx, y: b.y - dy, z: b.z - dz });
+        progress = true;
+      }
+    }
+  }
+
+  const segments = [];
+  let seq = 1;
+  for (const r of csvRows) {
+    const p1 = _coordOrFallback(nodePos.get(r.FROM_NODE));
+    const p2 = _coordOrFallback(nodePos.get(r.TO_NODE));
+    const comp = _classifyComponent(r);
+    const bore = Number(r.DIAMETER || 0);
+    const supportName = _supportNameFromType(r.RST_TYPE);
+
+    segments.push({
+      METHOD: 'ContEngineMethod',
+      SEQ_NO: seq++,
+      PIPELINE_REFERENCE: r.LINE_NO || '',
+      COMPONENT_TYPE: comp,
+      REF_NO: `${r.LINE_NO || 'LINE'}_${r.ELEMENTID ?? seq}`,
+      FROM_NODE: r.FROM_NODE,
+      TO_NODE: r.TO_NODE,
+      EP1: p1,
+      EP2: p2,
+      DELTA_X: Number(r.DELTA_X || 0),
+      DELTA_Y: Number(r.DELTA_Y || 0),
+      DELTA_Z: Number(r.DELTA_Z || 0),
+      DIAMETER: bore,
+      WALL_THICK: Number(r.WALL_THICK || 0),
+      MATERIAL: r.MATERIAL_NAME || '',
+      T1: Number(r.T1 || 0),
+      P1: Number(r.P1 || 0),
+      RIGID_WEIGHT: Number(r.RGD_WGT || 0),
+      SUPPORT_NAME: '',
+      SUPPORT_GUID: '',
+      SUPPORT_COORDS: null,
+      SKEY: comp === 'FLANGE' ? 'FLWN'
+        : comp === 'VALVE' ? 'VBFL'
+        : comp === 'BEND' ? 'BEBW'
+        : comp === 'TEE' ? 'TEBW'
+        : comp.startsWith('REDUCER') ? 'RCBW' : '',
+    });
+
+    // Restraints connected by REST_PTR to TO-node are exported as SUPPORT rows.
+    if (r.RST_TYPE) {
+      segments.push({
+        METHOD: 'ContEngineMethod',
+        SEQ_NO: seq++,
+        PIPELINE_REFERENCE: r.LINE_NO || '',
+        COMPONENT_TYPE: 'SUPPORT',
+        REF_NO: `${r.LINE_NO || 'LINE'}_SUP_${r.TO_NODE}`,
+        FROM_NODE: r.TO_NODE,
+        TO_NODE: r.TO_NODE,
+        EP1: null,
+        EP2: null,
+        DELTA_X: 0,
+        DELTA_Y: 0,
+        DELTA_Z: 0,
+        DIAMETER: 0,
+        WALL_THICK: 0,
+        MATERIAL: '',
+        T1: 0,
+        P1: 0,
+        RIGID_WEIGHT: 0,
+        SUPPORT_NAME: supportName,
+        SUPPORT_GUID: `UCI:${r.TO_NODE}`,
+        SUPPORT_COORDS: p2,
+        SKEY: '',
+      });
+    }
+  }
+  return segments;
+}
+
+export function buildPcfFromContinuity(segments, options = {}) {
+  const decimals = options.decimals === 1 ? 1 : 4;
+  const sourceName = options.sourceName || 'export';
+  const pipeline = segments.find(s => s.PIPELINE_REFERENCE)?.PIPELINE_REFERENCE || sourceName;
+  const lines = [
+    'ISOGEN-FILES ISOGEN.FLS',
+    'UNITS-BORE MM',
+    'UNITS-CO-ORDS MM',
+    'UNITS-WEIGHT KGS',
+    'UNITS-BOLT-DIA MM',
+    'UNITS-BOLT-LENGTH MM',
+    `PIPELINE-REFERENCE export ${pipeline}`,
+    '    PROJECT-IDENTIFIER P1',
+    '    AREA A1',
+    '',
+  ];
+
+  for (const s of segments) {
+    if (s.COMPONENT_TYPE === 'SUPPORT') {
+      lines.push('MESSAGE-SQUARE');
+      lines.push(`    SUPPORT, RefNo:=${s.REF_NO}, SeqNo:${s.SEQ_NO}, ${s.SUPPORT_NAME || 'RST'}, ${s.SUPPORT_GUID || 'UCI:UNKNOWN'}`);
+      lines.push('SUPPORT');
+      const c = _coordOrFallback(s.SUPPORT_COORDS);
+      lines.push(`    CO-ORDS    ${_fmtCoord(c.x, decimals)} ${_fmtCoord(c.y, decimals)} ${_fmtCoord(c.z, decimals)} ${_fmtCoord(0, decimals)}`);
+      lines.push(`    <SUPPORT_NAME>    ${s.SUPPORT_NAME || 'RST'}`);
+      lines.push(`    <SUPPORT_GUID>    ${s.SUPPORT_GUID || 'UCI:UNKNOWN'}`);
+      lines.push('');
+      continue;
+    }
+
+    const len = Math.sqrt((s.DELTA_X ** 2) + (s.DELTA_Y ** 2) + (s.DELTA_Z ** 2));
+    lines.push('MESSAGE-SQUARE');
+    lines.push(`    ${s.COMPONENT_TYPE}, ${s.MATERIAL || 'CS'}, LENGTH=${Math.round(Math.abs(len))}MM, ${_msgDirection(s.DELTA_X, s.DELTA_Y, s.DELTA_Z)}, RefNo:=${s.REF_NO}, SeqNo:${s.SEQ_NO}`);
+    lines.push(s.COMPONENT_TYPE);
+    const a = _coordOrFallback(s.EP1);
+    const b = _coordOrFallback(s.EP2);
+    lines.push(`    END-POINT    ${_fmtCoord(a.x, decimals)} ${_fmtCoord(a.y, decimals)} ${_fmtCoord(a.z, decimals)} ${_fmtCoord(s.DIAMETER, decimals)}`);
+    lines.push(`    END-POINT    ${_fmtCoord(b.x, decimals)} ${_fmtCoord(b.y, decimals)} ${_fmtCoord(b.z, decimals)} ${_fmtCoord(s.DIAMETER, decimals)}`);
+    if (s.COMPONENT_TYPE === 'PIPE' && s.PIPELINE_REFERENCE) {
+      lines.push(`    PIPELINE-REFERENCE export ${s.PIPELINE_REFERENCE}`);
+    }
+    if (s.SKEY) lines.push(`    <SKEY>  ${s.SKEY}`);
+    if (s.P1) lines.push(`    COMPONENT-ATTRIBUTE1    ${Math.round(s.P1 * 100)} KPA`);
+    if (s.T1) lines.push(`    COMPONENT-ATTRIBUTE2    ${Math.round(s.T1)} C`);
+    if (s.MATERIAL) lines.push(`    COMPONENT-ATTRIBUTE3    ${s.MATERIAL}`);
+    if (s.WALL_THICK) lines.push(`    COMPONENT-ATTRIBUTE4    ${s.WALL_THICK} MM`);
+    if (s.RIGID_WEIGHT && s.COMPONENT_TYPE !== 'PIPE') lines.push(`    COMPONENT-ATTRIBUTE8    ${s.RIGID_WEIGHT} KG`);
+    lines.push(`    COMPONENT-ATTRIBUTE97    =${s.REF_NO}`);
+    lines.push(`    COMPONENT-ATTRIBUTE98    ${s.SEQ_NO}`);
+    lines.push('');
+  }
+
+  // CRLF is mandatory by spec.
+  return lines.join('\r\n');
 }
 
 // ── Stage 3: PCF Adapter for Renderer ─────────────────────────────────────────

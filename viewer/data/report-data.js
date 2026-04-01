@@ -44,11 +44,11 @@ export const STRESS_TABLE = [
 ];
 
 export const DISPLACEMENT_TABLE = [
-  { node: 20,  dx: 0.0,  dy: 8.5,  dz: -2.1, loadCase: 'Operating', note: '< 10mm ✓' },
-  { node: 22,  dx: 0.0,  dy: 12.3, dz: -3.4, loadCase: 'Operating', note: '< 10mm ✓' },
+  { node: 20,  dx: 0.0,  dy: 8.5,  dz: -2.1, loadCase: 'Operating', note: '—' },
+  { node: 22,  dx: 0.0,  dy: 12.3, dz: -3.4, loadCase: 'Operating', note: '—' },
   { node: 380, dx: 1.2,  dy: 0.0,  dz: 0.5,  loadCase: 'Hydro',     note: '—' },
-  { node: 130, dx: -0.5, dy: 3.2,  dz: 0.0,  loadCase: 'Operating', note: '< 10mm ✓' },
-  { node: 649, dx: 0.0,  dy: 6.1,  dz: -1.8, loadCase: 'Operating', note: '< 10mm ✓' },
+  { node: 130, dx: -0.5, dy: 3.2,  dz: 0.0,  loadCase: 'Operating', note: '—' },
+  { node: 649, dx: 0.0,  dy: 6.1,  dz: -1.8, loadCase: 'Operating', note: '—' },
 ];
 
 export const SPECIAL_SUPPORTS = [];

@@ -383,7 +383,7 @@ export class IsometricRenderer {
     if (!data?.elements?.length) return [];
     try {
       const csvRows = buildUniversalCSV(data);
-      const pcfSegments = normalizeToPCF(csvRows);
+      const pcfSegments = normalizeToPCF(csvRows, { method: 'ContEngineMethod' });
       const adapted = adaptForRenderer(pcfSegments, data);
       return adapted.elements;
     } catch (err) {

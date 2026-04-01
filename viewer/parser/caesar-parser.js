@@ -160,6 +160,12 @@ export function parse(rawText, fileName = 'unknown.accdb') {
     data = parseNeutral(rawText, log);
   }
 
+  // Propagate extracted stresses/displacements from binary ACCDB if available
+  if (globalThis.__tempParsedAccdbPayload) {
+      if (globalThis.__tempParsedAccdbPayload.stresses) data.stresses = globalThis.__tempParsedAccdbPayload.stresses;
+      if (globalThis.__tempParsedAccdbPayload.displacements) data.displacements = globalThis.__tempParsedAccdbPayload.displacements;
+  }
+
   const { elements, nodes, bends, restraints, forces, rigids, units, meta } = data;
 
   // Gate 4–7: element-level validation

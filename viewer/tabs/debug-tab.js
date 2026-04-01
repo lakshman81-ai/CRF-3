@@ -5,7 +5,7 @@
 
 import { state } from '../core/state.js';
 import { on } from '../core/event-bus.js';
-import { buildUniversalCSV, normalizeToPCF } from '../utils/accdb-to-pcf.js';
+import { buildUniversalCSV, normalizeToPCF, buildPcfFromContinuity } from '../utils/accdb-to-pcf.js';
 
 let _listenersRegistered = false;
 
@@ -33,8 +33,9 @@ function _render(container) {
   let pcfSegments = [];
   if (parsed) {
       csvRows = buildUniversalCSV(parsed);
-      pcfSegments = normalizeToPCF(csvRows);
+      pcfSegments = normalizeToPCF(csvRows, { method: 'ContEngineMethod' });
   }
+  const pcfText = pcfSegments.length ? buildPcfFromContinuity(pcfSegments, { sourceName: state.fileName || 'export' }) : '';
 
   container.innerHTML = `
     <div class="report-section debug-tab" id="section-debug">
@@ -164,6 +165,9 @@ function _render(container) {
             </tbody>
           </table>
         </div>
+
+        <h4 class="sub-heading" style="margin-top:2rem;">Stage 3: ContEngineMethod PCF (CRLF)</h4>
+        <textarea class="mono" style="width:100%;min-height:220px;">${_esc(pcfText)}</textarea>
       ` : '<p class="tab-note">Load a file to see parsed datatable.</p>'}
 
     </div>

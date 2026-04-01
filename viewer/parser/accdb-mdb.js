@@ -33,6 +33,7 @@ const COLS = {
   density: ['PIPE_DENSITY','DENSITY','MATERIAL_DENSITY'],
   matName: ['MATERIAL_NAME','MATERIAL','MAT_NAME','MATERIAL_NUM'],
   corr:    ['CORR_ALLOW', 'CORROSION', 'CORROSION_ALLOWANCE', 'CA'],
+  rest:    ['REST_PTR', 'RESTRAINT_PTR', 'RESTRAINT'],
 };
 
 function matchCol(colNames, key) {
@@ -101,9 +102,12 @@ export async function parseBinaryAccdb(arrayBuffer, fileName, log) {
   const tableNames = reader.getTableNames();
   log.push({ level: 'INFO', msg: `ACCDB opened — ${tableNames.length} table(s): ${tableNames.join(', ')}` });
 
-  // ── Find JOBNAME and FLANGE info globally ──────────────────────────────
+  // ── Find JOBNAME, FLANGE, STRESS and DISPLACEMENT info globally ──────────────────────────────
   let jobName = null;
   let flanges = [];
+  let stresses = [];
+  let displacements = [];
+
   for (const tName of tableNames) {
     try {
       const t = reader.getTable(tName);
@@ -133,6 +137,51 @@ export async function parseBinaryAccdb(arrayBuffer, fileName, log) {
            });
         }
       }
+
+      // Extract Stresses
+      if (tName.toLowerCase().includes('output_stress')) {
+        const sRows = t.getData();
+        for (const sr of sRows) {
+            const node = sr['FROM_NODE'] || sr['NODE'] || '—';
+            const loadCase = sr['CASE'] || sr['LCASE_NAME'] || `Case ${sr['LCASE_NUM']}`;
+            const calc = sr['CODE_STRESST'] || sr['CODE_STRESSF'] || sr['CODE_STRESS'] || sr['CALC_STRESS'] || 0;
+            const allow = sr['ALLOW_STRESST'] || sr['ALLOW_STRESSF'] || sr['ALLOW_STRESS'] || sr['ALLOWABLE'] || null;
+            const ratio = sr['PRCT_STRT'] || sr['PRCT_STRF'] || sr['RATIO'] || (allow ? (calc / allow * 100) : 0);
+            const status = sr['CHECK_STATUS'] || (ratio <= 100 ? 'PASS' : 'FAIL');
+
+            stresses.push({
+                node,
+                loadCase,
+                calc: typeof calc === 'number' ? Number(calc.toFixed(1)) : parseFloat(calc || 0),
+                allow: allow ? (typeof allow === 'number' ? Number(allow.toFixed(1)) : parseFloat(allow)) : null,
+                ratio: typeof ratio === 'number' ? Number(ratio.toFixed(1)) : parseFloat(ratio || 0),
+                status: String(status).toUpperCase().includes('PASS') ? 'PASS' : 'FAIL',
+            });
+        }
+        log.push({ level: 'OK', msg: `Extracted ${stresses.length} stress records from "${tName}"` });
+      }
+
+      // Extract Displacements
+      if (tName.toLowerCase().includes('output_displacement')) {
+        const dRows = t.getData();
+        for (const dr of dRows) {
+            const node = dr['NODE'] || dr['NODE_NUM'] || '—';
+            const loadCase = dr['CASE'] || dr['LCASE_NAME'] || `Case ${dr['LCASE_NUM']}`;
+            const dx = dr['DX'] || 0;
+            const dy = dr['DY'] || 0;
+            const dz = dr['DZ'] || 0;
+
+            displacements.push({
+                node,
+                loadCase,
+                dx: typeof dx === 'number' ? Number(dx.toFixed(2)) : parseFloat(dx || 0),
+                dy: typeof dy === 'number' ? Number(dy.toFixed(2)) : parseFloat(dy || 0),
+                dz: typeof dz === 'number' ? Number(dz.toFixed(2)) : parseFloat(dz || 0),
+            });
+        }
+        log.push({ level: 'OK', msg: `Extracted ${displacements.length} displacement records from "${tName}"` });
+      }
+
     } catch(e) {}
   }
 
@@ -148,11 +197,11 @@ export async function parseBinaryAccdb(arrayBuffer, fileName, log) {
           if (typeof val === 'string' && val.length > 200) {
             if (/^#\$\s*(VERSION|ELEMENTS|CONTROL)/m.test(val)) {
               log.push({ level: 'OK', msg: `Found embedded CAESAR II neutral text in table "${name}", column "${col}"` });
-              return { embeddedText: val, jobName, flanges };
+              return { embeddedText: val, jobName, flanges, stresses, displacements };
             }
             if (val.includes('<CAESARII') || val.includes('<PIPINGMODEL')) {
               log.push({ level: 'OK', msg: `Found embedded CAESARII XML text in table "${name}", column "${col}"` });
-              return { embeddedText: val, jobName, flanges };
+              return { embeddedText: val, jobName, flanges, stresses, displacements };
             }
           }
         }
@@ -183,6 +232,7 @@ export async function parseBinaryAccdb(arrayBuffer, fileName, log) {
       const densCol   = matchCol(cols, 'density');
       const matCol    = matchCol(cols, 'matName');
       const corrCol   = matchCol(cols, 'corr');
+      const restCol   = matchCol(cols, 'rest');
 
       log.push({ level: 'INFO', msg: `Pipe-like table "${name}": FROM="${fromCol}" TO="${toCol}" OD="${odCol ?? '—'}" DX="${dxCol ?? '—'}" columns: ${cols.length}` });
 
@@ -191,6 +241,8 @@ export async function parseBinaryAccdb(arrayBuffer, fileName, log) {
 
       const elements = [];
       const nodes    = {};
+      const restraints = [];
+      const restraintIds = new Set();
 
       // Carry-forward (same pattern as XML parser)
       let pOd = 0, pWall = 0, pInsul = 0, pT1 = 0, pT2 = 0, pP1 = 0, pDens = 7.833e-3, pMat = 'CS', pCorr = 0;
@@ -229,6 +281,8 @@ export async function parseBinaryAccdb(arrayBuffer, fileName, log) {
         const toPos  = { x: origin.x + dx, y: origin.y + dy, z: origin.z + dz };
         if (!nodes[to]) nodes[to] = toPos;
 
+        const restPtr = parseInt(row[restCol]) || 0;
+
         elements.push({
           index: i, from, to, dx, dy, dz, od, wall, insul,
           T1, T2: 0, P1, corrosion,
@@ -238,50 +292,24 @@ export async function parseBinaryAccdb(arrayBuffer, fileName, log) {
           fromPos: { ...origin },
           toPos:   { ...toPos },
           hasBend: false,
+          restPtr: restPtr
         });
+
+        if (restPtr > 0 && !restraintIds.has(from)) {
+          // Add a basic restraint tag if a pointer is found and node isn't tagged yet
+          restraints.push({ ptr: restPtr, node: from, type: 'Support (ACCDB)', isAnchor: false, dofs: [1], stiffness: 1e10 });
+          restraintIds.add(from);
+        }
       }
 
-      // ── Find JOBNAME and FLANGE info globally ──────────────────────────────
-      let jobName = null;
-      let flanges = [];
-      for (const tName of tableNames) {
-        try {
-          const t = reader.getTable(tName);
-          const tCols = t.getColumnNames().map(c => c.toUpperCase());
-          // Extract JobName
-          if (!jobName && tCols.some(c => c.includes('JOBNAME') || c.includes('PROJECT'))) {
-            const tr = t.getData()[0];
-            if (tr) {
-              const jk = Object.keys(tr).find(k => k.toUpperCase().includes('JOBNAME') || k.toUpperCase() === 'JOB');
-              if (jk && tr[jk]) jobName = String(tr[jk]).trim();
-            }
-          }
-          // Extract Flange
-          if (tName.toLowerCase().includes('output_flange')) {
-            const fRows = t.getData();
-            for (const fr of fRows) {
-               // Standardise output_flange format based on generic CAESAR II keys
-               const node = fr['NODE'] || fr['NODE_NUM'] || '—';
-               const method = fr['METHOD'] || 'Equivalent Pressure';
-               const maxPct = fr['RATIO'] || fr['MAX_PERCENT'] || fr['PERCENT'] || '—';
-               const status = fr['STATUS'] || fr['PASSFAIL'] || (parseFloat(maxPct) <= 100 ? 'PASS' : parseFloat(maxPct) > 100 ? 'FAIL' : 'PASS');
-               flanges.push({ 
-                 location: `Node ${node}`, 
-                 method: String(method), 
-                 standard: 'Generic', 
-                 status: String(status).toUpperCase() === 'FAIL' || status === '1' ? 'FAIL' : 'PASS',
-                 maxPct: maxPct 
-               });
-            }
-          }
-        } catch(e) {}
-      }
+      // We already extracted JOBNAME, FLANGE, STRESSES, and DISPLACEMENTS globally earlier.
+      // Re-use `jobName`, `flanges`, `stresses`, `displacements` from outer scope.
 
       if (elements.length > 0) {
         log.push({ level: 'OK', msg: `Extracted ${elements.length} element(s) from ACCDB table "${name}"` });
         return {
           elements, nodes,
-          bends: [], restraints: [], forces: [], rigids: [], flanges,
+          bends: [], restraints, forces: [], rigids: [], flanges, stresses, displacements,
           units: {}, meta: { sourceTable: name, jobName },
           format: 'ACCDB-TABLE',
         };
