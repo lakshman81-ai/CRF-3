@@ -76,27 +76,51 @@ function _render(container) {
       <!-- Computation Details -->
       ${parsed ? _computationDetails(parsed) : ''}
 
-      <!-- Raw JSON viewer -->
+      <!-- Elements Data Table -->
       ${parsed ? `
-        <h4 class="sub-heading" style="margin-top:1.5rem">Raw Parsed Data</h4>
-        <div class="debug-controls">
-          <label>Section:
-            <select id="json-section-select">
-              <option value="elements">elements (${parsed.elements?.length ?? 0})</option>
-              <option value="nodes">nodes (${Object.keys(parsed.nodes ?? {}).length})</option>
-              <option value="bends">bends (${parsed.bends?.length ?? 0})</option>
-              <option value="restraints">restraints (${parsed.restraints?.length ?? 0})</option>
-              <option value="forces">forces (${parsed.forces?.length ?? 0})</option>
-              <option value="rigids">rigids (${parsed.rigids?.length ?? 0})</option>
-              <option value="units">units</option>
-              <option value="meta">meta</option>
-              <option value="validation">validation</option>
-            </select>
-          </label>
-          <button id="json-update-btn" class="btn-primary" style="margin-left:10px;">Update State</button>
+        <div class="debug-controls" style="margin-top:1.5rem; display:flex; justify-content:space-between; align-items:flex-end;">
+          <h4 class="sub-heading" style="margin:0;">Elements Datatable (${parsed.elements?.length ?? 0} rows)</h4>
+          <button id="dt-update-btn" class="btn-primary">Sync Geometry & Update State</button>
         </div>
-        <textarea class="json-box" id="json-box" spellcheck="false" style="width:100%; min-height:350px;">${_jsonSection(parsed, 'elements')}</textarea>
-      ` : '<p class="tab-note">Load a file to see raw data.</p>'}
+        <div style="overflow-x:auto; margin-top:10px;">
+          <table class="data-table" id="debug-elements-table" style="min-width: 1200px; font-size: 11px;">
+            <thead>
+              <tr>
+                <th>Index</th>
+                <th>From</th>
+                <th>To</th>
+                <th>DX (mm)</th>
+                <th>DY (mm)</th>
+                <th>DZ (mm)</th>
+                <th>OD (mm)</th>
+                <th>Wall (mm)</th>
+                <th>T1 (°C)</th>
+                <th>T2 (°C)</th>
+                <th>P1 (bar)</th>
+                <th>Material</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${(parsed.elements || []).map((el, i) => `
+                <tr data-index="${i}">
+                  <td class="mono muted">${i}</td>
+                  <td contenteditable="true" class="editable-field mono" data-col="from">${el.from ?? ''}</td>
+                  <td contenteditable="true" class="editable-field mono" data-col="to">${el.to ?? ''}</td>
+                  <td contenteditable="true" class="editable-field mono" data-col="dx">${el.dx ?? ''}</td>
+                  <td contenteditable="true" class="editable-field mono" data-col="dy">${el.dy ?? ''}</td>
+                  <td contenteditable="true" class="editable-field mono" data-col="dz">${el.dz ?? ''}</td>
+                  <td contenteditable="true" class="editable-field mono" data-col="od">${el.od ?? ''}</td>
+                  <td contenteditable="true" class="editable-field mono" data-col="wall">${el.wall ?? ''}</td>
+                  <td contenteditable="true" class="editable-field mono" data-col="T1">${el.T1 ?? ''}</td>
+                  <td contenteditable="true" class="editable-field mono" data-col="T2">${el.T2 ?? ''}</td>
+                  <td contenteditable="true" class="editable-field mono" data-col="P1">${el.P1 ?? ''}</td>
+                  <td contenteditable="true" class="editable-field mono" data-col="material">${el.material ?? ''}</td>
+                </tr>
+              `).join('')}
+            </tbody>
+          </table>
+        </div>
+      ` : '<p class="tab-note">Load a file to see parsed datatable.</p>'}
 
     </div>
   `;
@@ -110,40 +134,54 @@ function _render(container) {
     });
   });
 
-  // Wire JSON section select
-  container.querySelector('#json-section-select')?.addEventListener('change', e => {
-    const jsonBox = container.querySelector('#json-box');
-    if (jsonBox && parsed) jsonBox.value = _jsonSection(parsed, e.target.value);
-  });
+  // Wire Data Table Update button
+  container.querySelector('#dt-update-btn')?.addEventListener('click', () => {
+    if (!parsed || !parsed.elements) return;
 
-  // Wire Update State button
-  container.querySelector('#json-update-btn')?.addEventListener('click', () => {
-    const jsonBox = container.querySelector('#json-box');
-    const select = container.querySelector('#json-section-select');
-    if (!jsonBox || !select || !parsed) return;
+    const rows = container.querySelectorAll('#debug-elements-table tbody tr');
+    let hasChanges = false;
 
-    try {
-      const newData = JSON.parse(jsonBox.value);
-      parsed[select.value] = newData;
+    rows.forEach(tr => {
+      const idx = parseInt(tr.dataset.index, 10);
+      const el = parsed.elements[idx];
+      if (!el) return;
 
-      // Flash success
-      const btn = container.querySelector('#json-update-btn');
-      const oldText = btn.textContent;
-      btn.textContent = '✓ Saved';
-      btn.style.background = 'var(--color-pass)';
-      setTimeout(() => {
-        btn.textContent = oldText;
-        btn.style.background = '';
-      }, 1500);
+      tr.querySelectorAll('td[data-col]').forEach(td => {
+        const col = td.dataset.col;
+        const valStr = td.textContent.trim();
 
-      // Trigger re-renders if elements changed
-      if (select.value === 'elements' || select.value === 'nodes') {
+        if (col === 'material' || col === 'from' || col === 'to') {
+            const parsedVal = valStr === '' ? undefined : (col === 'material' ? valStr : parseInt(valStr, 10));
+            if (el[col] !== parsedVal) {
+                el[col] = parsedVal;
+                hasChanges = true;
+            }
+        } else {
+            const num = parseFloat(valStr);
+            const parsedVal = isNaN(num) ? undefined : num;
+            if (el[col] !== parsedVal) {
+                el[col] = parsedVal;
+                hasChanges = true;
+            }
+        }
+      });
+    });
+
+    // Flash success
+    const btn = container.querySelector('#dt-update-btn');
+    const oldText = btn.textContent;
+    btn.textContent = '✓ Saved & Synced';
+    btn.style.background = 'var(--color-pass)';
+    setTimeout(() => {
+      btn.textContent = oldText;
+      btn.style.background = '';
+    }, 1500);
+
+    // Trigger re-renders if elements changed
+    if (hasChanges) {
         import('../core/event-bus.js').then(({ emit }) => {
           emit('parse-complete', parsed);
         });
-      }
-    } catch (err) {
-      alert(`Invalid JSON format:\n${err.message}`);
     }
   });
 }

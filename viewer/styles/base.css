@@ -283,8 +283,11 @@ body {
 /* Section disabled logic via toggle */
 .disabled-section {
   color: var(--color-muted);
-  pointer-events: none;
   opacity: 0.5;
+}
+
+.disabled-section > *:not(.toggle-inline) {
+  pointer-events: none;
 }
 
 /* Scope rows */

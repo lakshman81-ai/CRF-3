@@ -25,6 +25,8 @@ export async function renderGeometry(container) {
       <div class="geo-controls">
         <!-- Removed internal file loader, rely on universal drag-drop -->
         <button class="btn-secondary" id="geo-reset-btn">⟳ Reset View</button>
+        <button class="btn-secondary" id="geo-center-btn" title="Auto Center">⌖</button>
+        <button class="btn-secondary" id="geo-proj-btn" title="Toggle Orthographic / Perspective">📽</button>
 
         <span class="control-sep"></span>
 
@@ -50,6 +52,11 @@ export async function renderGeometry(container) {
         </label>
 
         <button class="btn-secondary" id="pull-data-btn">Pull from data table</button>
+
+        <label class="control-label" style="width:160px;">
+          Max label per item:
+          <input type="number" id="max-legend-labels" min="1" max="20" style="width:40px;" value="${state.geoToggles.maxLegendLabels ?? 3}">
+        </label>
 
         <label class="toggle-inline">
           <input type="checkbox" id="tog-labels" ${state.geoToggles.nodeLabels ? 'checked' : ''}> Node Labels
@@ -142,6 +149,14 @@ function _wireControls(container) {
     _renderer?.resetView();
   });
 
+  container.querySelector('#geo-center-btn')?.addEventListener('click', () => {
+    _renderer?.resetView();
+  });
+
+  container.querySelector('#geo-proj-btn')?.addEventListener('click', () => {
+    _renderer?.toggleProjection();
+  });
+
   container.querySelector('#legend-select')?.addEventListener('change', e => {
     state.legendField = e.target.value;
     const heatMapSelect = container.querySelector('#heatmap-select');
@@ -160,7 +175,13 @@ function _wireControls(container) {
   });
 
   container.querySelector('#pull-data-btn')?.addEventListener('click', () => {
-    _renderer?.rebuild();
+    // A direct parse-complete emit will force everything, including _rebuildLabels and re-parsing sizes.
+    // _renderer.rebuild() alone doesn't update the underlying DOM or UI bindings if other tabs need it.
+    if (state.parsed) {
+        emit('parse-complete', state.parsed);
+    } else {
+        _renderer?.rebuild();
+    }
   });
 
   container.querySelector('#tog-labels')?.addEventListener('change', e => {
@@ -171,6 +192,14 @@ function _wireControls(container) {
   container.querySelector('#tog-supports')?.addEventListener('change', e => {
     state.geoToggles.supports = e.target.checked;
     emit('geo-toggle', state.geoToggles);
+  });
+
+  container.querySelector('#max-legend-labels')?.addEventListener('change', e => {
+    let val = parseInt(e.target.value, 10);
+    if (isNaN(val) || val < 1) val = 3;
+    e.target.value = val;
+    state.geoToggles.maxLegendLabels = val;
+    emit('legend-changed', state.legendField);
   });
 }
 

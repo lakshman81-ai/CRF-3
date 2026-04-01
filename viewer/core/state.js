@@ -46,6 +46,7 @@ export const state = {
   geoToggles: {
     nodeLabels: true,
     supports: true,
+    maxLegendLabels: 3,
   },
   /** Input tab picker selections */
   inputToggles: {

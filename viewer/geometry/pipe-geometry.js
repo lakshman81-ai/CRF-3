@@ -67,6 +67,16 @@ export function heatMapColor(t) {
   return (r << 16) | (g << 8) | b;
 }
 
+const discreteColorCache = new Map();
+export function generateDiscreteColor(val) {
+  if (discreteColorCache.has(val)) return discreteColorCache.get(val);
+  const hue = ((val * 137.508) % 360) / 360;
+  const color = new THREE.Color().setHSL(hue, 0.7, 0.5);
+  const hex = color.getHex();
+  discreteColorCache.set(val, hex);
+  return hex;
+}
+
 /**
  * Determine color for an element given the current render mode and precomputed min/max.
  * @param {object} el  parsed element
@@ -77,9 +87,9 @@ export function colorForMode(el, mode, range = { min: 0, max: 100 }) {
   if (mode.startsWith('HeatMap:')) {
     const field = mode.split(':')[1];
     const val = el[field] ?? 0;
-    const { min, max } = range;
-    const t = max === min ? 0.5 : (val - min) / (max - min);
-    return heatMapColor(t);
+
+    // Determine distinct colour for value
+    return generateDiscreteColor(val);
   }
   switch (mode) {
     case 'material': return colorForMaterial(el.material);

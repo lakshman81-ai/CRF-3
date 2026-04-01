@@ -39,22 +39,59 @@ function createDisc(pos, normal, outerRadius, thickness, material) {
   return mesh;
 }
 
+// Helper to create a cylinder
+function createCylinder(start, end, radius, material) {
+  const dir = new THREE.Vector3().subVectors(end, start);
+  const len = dir.length();
+  if (len === 0) return null;
+  const geo = new THREE.CylinderGeometry(radius, radius, len, 8);
+  const mesh = new THREE.Mesh(geo, material);
+  mesh.position.copy(start).add(dir.multiplyScalar(0.5));
+  mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir.clone().normalize());
+
+  // Also add wireframe for pencil style
+  const edges = new THREE.EdgesGeometry(geo);
+  const line = new THREE.LineSegments(edges, new THREE.LineBasicMaterial({ color: material.color }));
+  mesh.add(line);
+  mesh.material.transparent = true;
+  mesh.material.opacity = 0.2;
+
+  return mesh;
+}
+
 export function createAnchorSymbol(pos) {
   const p = new THREE.Vector3(pos.x * SCALE, pos.z * SCALE, -pos.y * SCALE);
   const group = new THREE.Group();
 
   const r = 0.015; // 15mm scaled base radius
-  const strapR = r * 1.2;
+  const strapR = r * 1.1;
   const baseW = r * 3;
 
-  // Clamping strap
+  // Clamping strap (oversized thin disc crossing pipe axis)
   const strap = createDisc(p, new THREE.Vector3(1, 0, 0), strapR, r * 0.4, MAT_ANCHOR);
   group.add(strap);
 
-  // Base block (pencil style: wireframe or light opacity)
+  // Base block (anchor to ground/structure)
   const basePos = p.clone().add(new THREE.Vector3(0, -r * 1.5, 0));
   const base = createBox(basePos, baseW, MAT_ANCHOR, true);
   group.add(base);
+
+  // Vertical legs connecting strap to base
+  const legLeft = createCylinder(
+      p.clone().add(new THREE.Vector3(-r, 0, 0)),
+      basePos.clone().add(new THREE.Vector3(-r, r * 0.5, 0)),
+      r * 0.2,
+      MAT_ANCHOR
+  );
+  if (legLeft) group.add(legLeft);
+
+  const legRight = createCylinder(
+      p.clone().add(new THREE.Vector3(r, 0, 0)),
+      basePos.clone().add(new THREE.Vector3(r, r * 0.5, 0)),
+      r * 0.2,
+      MAT_ANCHOR
+  );
+  if (legRight) group.add(legRight);
 
   return group;
 }
@@ -71,15 +108,17 @@ export function createGuideSymbol(pos) {
   const loopR = r * 1.2;
   const loopThickness = r * 0.15;
 
-  // Guide loop
+  // Guide loop (thin vertical disc)
   const loop = createDisc(p, new THREE.Vector3(1, 0, 0), loopR, loopThickness, MAT_GUIDE);
   group.add(loop);
 
   // Slide pad
   const padPos = p.clone().add(new THREE.Vector3(0, -r, 0));
   const pad = createBox(padPos, r * 1.5, MAT_GUIDE, true);
-  pad.scale.set(1, 0.2, 1);
-  group.add(pad);
+  if (pad) {
+      pad.scale.set(1, 0.2, 1);
+      group.add(pad);
+  }
 
   return group;
 }

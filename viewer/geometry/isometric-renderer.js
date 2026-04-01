@@ -8,7 +8,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { CSS2DRenderer } from 'three/addons/renderers/CSS2DRenderer.js';
-import { createPipeLine, createBendArc, colorForMode, OD_COLORS, toThree } from './pipe-geometry.js';
+import { createPipeLine, createBendArc, colorForMode, OD_COLORS, toThree, generateDiscreteColor } from './pipe-geometry.js';
 import { createAnchorSymbol, createGuideSymbol, createForceArrow } from './symbols.js';
 import { createNodeLabel, createSegmentLabel, computeStretches } from './labels.js';
 import { materialFromDensity } from '../utils/formatter.js';
@@ -44,11 +44,17 @@ export class IsometricRenderer {
     // Use larger frustum for PCF Fixer style orthographic camera
     const aspect = w / h;
     const frustum = 5000;
-    this._camera = new THREE.OrthographicCamera(
+
+    this._orthoCamera = new THREE.OrthographicCamera(
       -frustum * aspect, frustum * aspect,
       frustum, -frustum,
       -50000, 50000
     );
+    this._perspCamera = new THREE.PerspectiveCamera(45, aspect, 1, 100000);
+
+    this._isOrtho = true;
+    this._camera = this._orthoCamera;
+
     this._camera.position.set(5000, 5000, 5000);
     this._camera.lookAt(0, 0, 0);
 
@@ -67,7 +73,7 @@ export class IsometricRenderer {
     this._controls.enableDamping = true;
     this._controls.dampingFactor = 0.1;
     this._controls.addEventListener('change', () => {
-      if (this._pipeGroup) {
+      if (this._pipeGroup && this._isOrtho) {
         const box = new THREE.Box3().setFromObject(this._pipeGroup);
         if (!box.isEmpty()) {
             const sz = box.getSize(new THREE.Vector3());
@@ -92,7 +98,10 @@ export class IsometricRenderer {
 
   _buildViewCube() {
     let cube = document.getElementById('pcf-view-cube');
-    if (cube) return;
+    if (cube) {
+        this._viewCubeEl = cube;
+        return;
+    }
     const size = 90;
     cube = document.createElement('div');
     cube.id = 'pcf-view-cube';
@@ -158,7 +167,12 @@ export class IsometricRenderer {
 
   _buildAxisGizmo() {
     let container = document.getElementById('pcf-axis-gizmo');
-    if (container) return;
+    if (container) {
+        this._gizmoEl = container;
+        const canvas = container.querySelector('canvas');
+        if (canvas) this._axisGizmoCtx = canvas.getContext('2d');
+        return;
+    }
     container = document.createElement('div');
     container.id = 'pcf-axis-gizmo';
     container.style.cssText = `
@@ -239,23 +253,52 @@ export class IsometricRenderer {
     if (!w || !h) return;
     const aspect = w / h;
 
-    // Scale frustum dynamically based on current zoom / scene size
-    let frustum = 5000;
-    if (this._pipeGroup) {
-      const box = new THREE.Box3().setFromObject(this._pipeGroup);
-      if (!box.isEmpty()) {
-         const size = box.getSize(new THREE.Vector3());
-         frustum = Math.max(size.x, size.y, size.z) * 0.8;
-      }
+    if (this._isOrtho) {
+        let frustum = 5000;
+        if (this._pipeGroup) {
+          const box = new THREE.Box3().setFromObject(this._pipeGroup);
+          if (!box.isEmpty()) {
+             const size = box.getSize(new THREE.Vector3());
+             frustum = Math.max(size.x, size.y, size.z) * 0.8;
+          }
+        }
+        this._orthoCamera.left   = -frustum * aspect;
+        this._orthoCamera.right  =  frustum * aspect;
+        this._orthoCamera.top    =  frustum;
+        this._orthoCamera.bottom = -frustum;
+        this._orthoCamera.updateProjectionMatrix();
+    } else {
+        this._perspCamera.aspect = aspect;
+        this._perspCamera.updateProjectionMatrix();
     }
 
-    this._camera.left   = -frustum * aspect;
-    this._camera.right  =  frustum * aspect;
-    this._camera.top    =  frustum;
-    this._camera.bottom = -frustum;
-    this._camera.updateProjectionMatrix();
     this._renderer.setSize(w, h);
     this._css2d.setSize(w, h);
+  }
+
+  toggleProjection() {
+      const w = this._container.clientWidth;
+      const h = this._container.clientHeight;
+      const aspect = w / h;
+
+      if (this._isOrtho) {
+          // Switch to Perspective
+          this._perspCamera.position.copy(this._orthoCamera.position);
+          this._perspCamera.quaternion.copy(this._orthoCamera.quaternion);
+          this._perspCamera.aspect = aspect;
+          this._perspCamera.updateProjectionMatrix();
+          this._camera = this._perspCamera;
+          this._isOrtho = false;
+      } else {
+          // Switch to Ortho
+          this._orthoCamera.position.copy(this._perspCamera.position);
+          this._orthoCamera.quaternion.copy(this._perspCamera.quaternion);
+          this._orthoCamera.updateProjectionMatrix();
+          this._camera = this._orthoCamera;
+          this._isOrtho = true;
+      }
+      this._controls.object = this._camera;
+      this._controls.update();
   }
 
   /** Compute min/max range for a field across all elements */
@@ -358,11 +401,33 @@ export class IsometricRenderer {
     }
 
     // One label per continuous linear stretch
-    const stretches = computeStretches(elements, state.legendField, materialFromDensity);
-    for (const stretch of stretches) {
-      if (!stretch.text) continue;
-      const lbl = createSegmentLabel(stretch.text, stretch.midPos);
-      this._labelGroup.add(lbl);
+    let stretches = computeStretches(elements, state.legendField, materialFromDensity);
+
+    // Group stretches by their text value to enforce the "max labels per item" rule
+    const maxLabels = state.geoToggles.maxLegendLabels ?? 3;
+    const stretchesByText = {};
+    for (const s of stretches) {
+        if (!s.text) continue;
+        if (!stretchesByText[s.text]) stretchesByText[s.text] = [];
+        stretchesByText[s.text].push(s);
+    }
+
+    // Randomly select up to maxLabels items for each text value
+    for (const text in stretchesByText) {
+        let group = stretchesByText[text];
+        if (group.length > maxLabels) {
+            // Shuffle array and pick first maxLabels
+            for (let i = group.length - 1; i > 0; i--) {
+                const j = Math.floor(Math.random() * (i + 1));
+                [group[i], group[j]] = [group[j], group[i]];
+            }
+            group = group.slice(0, maxLabels);
+        }
+
+        for (const stretch of group) {
+            const lbl = createSegmentLabel(stretch.text, stretch.midPos);
+            this._labelGroup.add(lbl);
+        }
     }
   }
 
@@ -376,17 +441,16 @@ export class IsometricRenderer {
 
     if (isHeatMap) {
       const unit = heatField === 'P1' ? ' bar' : '°C';
-      const minV = Number(range.min).toFixed(heatField === 'P1' ? 2 : 0);
-      const maxV = Number(range.max).toFixed(heatField === 'P1' ? 2 : 0);
+      const uniqueValues = [...new Set(elements.map(e => e[heatField]).filter(v => v !== undefined && v !== null))].sort((a,b)=>b-a);
+      const swatches = uniqueValues.map(v => {
+          const col = generateDiscreteColor(v);
+          const fv = Number(v).toFixed(heatField === 'P1' ? 2 : 0);
+          return `<div class="legend-row"><span class="legend-swatch" style="background:#${col.toString(16).padStart(6,'0')}"></span><span>${fv}${unit}</span></div>`;
+      }).join('');
+
       panel.innerHTML = `
         <div class="legend-title">${heatField} Heat Map</div>
-        <div style="display:flex;align-items:center;gap:6px;margin:6px 0;">
-          <div style="width:12px;height:80px;background:linear-gradient(to top,#0000ff,#00ffff,#00ff00,#ffff00,#ff0000);border-radius:3px;flex-shrink:0;"></div>
-          <div style="display:flex;flex-direction:column;justify-content:space-between;height:80px;font-size:10px;color:#444;">
-            <span>${maxV}${unit}</span>
-            <span>${minV}${unit}</span>
-          </div>
-        </div>
+        ${swatches}
         <div class="legend-row"><span class="legend-swatch swatch-anchor"></span><span>Anchor ▣</span></div>
         <div class="legend-row"><span class="legend-swatch swatch-guide"></span><span>Guide ○</span></div>
       `;
@@ -402,7 +466,7 @@ export class IsometricRenderer {
         }).join('');
       } else {
         // OD-based swatches (pipelineRef / T1 / T2 / P1 all use OD colouring by default)
-        // Group by value, limit repeats to 1/10th min 3
+        // Group by value
         const uniqueValues = [...new Set(elements.map(e => e.od))].filter(v => v > 0);
         swatches = OD_COLORS
           .filter(c => uniqueValues.some(od => Math.abs(od - c.od) < 1))
@@ -411,34 +475,9 @@ export class IsometricRenderer {
         if (!swatches) {
           swatches = `<div class="legend-row"><span class="legend-swatch" style="background:#444"></span><span>Pipe</span></div>`;
         }
-
-        // Pick random points for discrete legend items
-        const maxRepeats = Math.max(3, Math.floor(elements.length / 10));
-        const valMap = {};
-        for (const el of elements) {
-          const val = legendField === 'pipelineRef' ? el.od : (legendField === 'material' ? el.material : el[legendField]);
-          if (!valMap[val]) valMap[val] = [];
-          if (valMap[val].length < maxRepeats && Math.random() > 0.5) {
-             valMap[val].push(el);
-          }
-        }
-
-        // Render discrete text labels randomly using computeStretches or directly
-        for (const val in valMap) {
-          const repeats = valMap[val];
-          for (const el of repeats) {
-            const mid = new THREE.Vector3().addVectors(el.fromPos, el.toPos).multiplyScalar(0.5);
-            // using existing createSegmentLabel but adapted for arbitrary points
-            // Assuming createSegmentLabel expects (text, midPos)
-            // But from labels.js createSegmentLabel uses SCALE
-            // So we pass mid manually
-            const lbl = createSegmentLabel(String(val), mid);
-            this._labelGroup.add(lbl);
-          }
-        }
       }
 
-      const titles = { pipelineRef:'Legends', material:'Material', T1:'T1 (\u00b0C)', T2:'T2 (\u00b0C)', P1:'P1 (bar)' };
+      const titles = { pipelineRef:'OD LEGEND', material:'MATERIAL LEGEND', T1:'T1 (\u00b0C)', T2:'T2 (\u00b0C)', P1:'P1 (bar)' };
       panel.innerHTML = `
         <div class="legend-title">${titles[legendField] || 'Legend'}</div>
         ${swatches}

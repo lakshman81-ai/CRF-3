@@ -47,10 +47,10 @@ export function renderSummary(container) {
       <table class="data-table params-table">
         <thead><tr><th>Param</th><th>Value</th><th>Description</th></tr></thead>
         <tbody>
-          <tr><td class="param-key">T1</td><td class="editable-field" contenteditable="true">${opCond ? opCond.T1.toFixed(0) : '—'} °C</td><td>Max Design Temperature</td></tr>
-          <tr><td class="param-key">T2</td><td class="editable-field" contenteditable="true">${opCond ? opCond.T2.toFixed(1) : '—'} °C</td><td>Normal Operating Temperature</td></tr>
-          <tr><td class="param-key">T3</td><td class="editable-field" contenteditable="true">${opCond ? opCond.T3.toFixed(1) : '—'} °C</td><td>Min Design Temperature</td></tr>
-          <tr><td class="param-key">P1</td><td class="editable-field" contenteditable="true">${opCond ? opCond.P1.toFixed(2) : '—'} bar</td><td>Design Pressure</td></tr>
+          <tr><td class="param-key">T1</td><td class="editable-field" contenteditable="true">${opCond && opCond.T1 !== undefined ? opCond.T1.toFixed(0) + ' °C' : '—'}</td><td>Max Design Temperature</td></tr>
+          <tr><td class="param-key">T2</td><td class="editable-field" contenteditable="true">${opCond && opCond.T2 !== undefined ? opCond.T2.toFixed(1) + ' °C' : '—'}</td><td>Normal Operating Temperature</td></tr>
+          <tr><td class="param-key">T3</td><td class="editable-field" contenteditable="true">${opCond && opCond.T3 !== undefined ? opCond.T3.toFixed(1) + ' °C' : '—'}</td><td>Min Design Temperature</td></tr>
+          <tr><td class="param-key">P1</td><td class="editable-field" contenteditable="true">${opCond && opCond.P1 !== undefined ? opCond.P1.toFixed(2) + ' bar' : '—'}</td><td>Design Pressure</td></tr>
           <tr><td class="param-key">plantLife</td><td class="editable-field" contenteditable="true">25 years</td><td>Plant Life</td></tr>
           <tr><td class="param-key">operatingHrs</td><td class="editable-field" contenteditable="true">7000 hrs</td><td>Operating Hours</td></tr>
           <tr><td class="param-key">maxDeflect</td><td class="editable-field" contenteditable="true">10 mm</td><td>Max Sustained Vertical Mid-span Deflection</td></tr>

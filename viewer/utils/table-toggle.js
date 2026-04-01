@@ -45,6 +45,10 @@ function _applyToggleState(h3, isChecked) {
     h3.classList.add('print-hidden');
   }
 
+  // Ensure h3's checkbox remains clickable even if section is disabled
+  const toggleLbl = h3.querySelector('.toggle-inline');
+  if (toggleLbl) toggleLbl.style.pointerEvents = 'auto';
+
   while (next && !next.matches('h3.section-heading')) {
     if (isChecked) {
       next.classList.remove('disabled-section');

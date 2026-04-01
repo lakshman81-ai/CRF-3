@@ -118,9 +118,9 @@ export function computeOperatingConditions(parsed) {
   }
   if (!maxEl) return null;
   return {
-    T1: maxEl.T1 ?? 0,
-    T2: maxEl.T2 ?? 0,
-    T3: maxEl.T3 ?? 0,
-    P1: maxEl.P1 ?? 0,
+    T1: maxEl.T1,
+    T2: maxEl.T2,
+    T3: maxEl.T3,
+    P1: maxEl.P1,
   };
 }
