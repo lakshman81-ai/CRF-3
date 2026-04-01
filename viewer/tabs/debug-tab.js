@@ -5,6 +5,7 @@
 
 import { state } from '../core/state.js';
 import { on } from '../core/event-bus.js';
+import { buildUniversalCSV, normalizeToPCF } from '../utils/accdb-to-pcf.js';
 
 let _listenersRegistered = false;
 
@@ -27,6 +28,13 @@ function _render(container) {
   const log    = state.log    ?? [];
   const errors = state.errors ?? [];
   const parsed = state.parsed;
+
+  let csvRows = [];
+  let pcfSegments = [];
+  if (parsed) {
+      csvRows = buildUniversalCSV(parsed);
+      pcfSegments = normalizeToPCF(csvRows);
+  }
 
   container.innerHTML = `
     <div class="report-section debug-tab" id="section-debug">
@@ -76,13 +84,13 @@ function _render(container) {
       <!-- Computation Details -->
       ${parsed ? _computationDetails(parsed) : ''}
 
-      <!-- Elements Data Table -->
+      <!-- Elements Data Table (Stage 0) -->
       ${parsed ? `
         <div class="debug-controls" style="margin-top:1.5rem; display:flex; justify-content:space-between; align-items:flex-end;">
-          <h4 class="sub-heading" style="margin:0;">Elements Datatable (${parsed.elements?.length ?? 0} rows)</h4>
+          <h4 class="sub-heading" style="margin:0;">Stage 0: Raw Elements Datatable (${parsed.elements?.length ?? 0} rows)</h4>
           <button id="dt-update-btn" class="btn-primary">Sync Geometry & Update State</button>
         </div>
-        <div style="overflow-x:auto; margin-top:10px;">
+        <div style="overflow-x:auto; margin-top:10px; max-height:400px; overflow-y:auto;">
           <table class="data-table" id="debug-elements-table" style="min-width: 1200px; font-size: 11px;">
             <thead>
               <tr>
@@ -115,6 +123,42 @@ function _render(container) {
                   <td contenteditable="true" class="editable-field mono" data-col="T2">${el.T2 ?? ''}</td>
                   <td contenteditable="true" class="editable-field mono" data-col="P1">${el.P1 ?? ''}</td>
                   <td contenteditable="true" class="editable-field mono" data-col="material">${el.material ?? ''}</td>
+                </tr>
+              `).join('')}
+            </tbody>
+          </table>
+        </div>
+
+        <h4 class="sub-heading" style="margin-top:2rem;">Stage 1: Universal CSV Data (${csvRows.length} rows)</h4>
+        <div style="overflow-x:auto; margin-top:10px; max-height:400px; overflow-y:auto;">
+          <table class="data-table" style="min-width: 2000px; font-size: 11px;">
+            <thead>
+              <tr>
+                ${Object.keys(csvRows[0] || {}).map(k => `<th>${k}</th>`).join('')}
+              </tr>
+            </thead>
+            <tbody>
+              ${csvRows.map((r, i) => `
+                <tr data-index="${i}">
+                  ${Object.values(r).map(v => `<td class="mono">${v !== undefined ? v : ''}</td>`).join('')}
+                </tr>
+              `).join('')}
+            </tbody>
+          </table>
+        </div>
+
+        <h4 class="sub-heading" style="margin-top:2rem;">Stage 2: Final PCF Data Table (${pcfSegments.length} rows)</h4>
+        <div style="overflow-x:auto; margin-top:10px; max-height:400px; overflow-y:auto;">
+          <table class="data-table" style="min-width: 1600px; font-size: 11px;">
+            <thead>
+              <tr>
+                ${Object.keys(pcfSegments[0] || {}).map(k => `<th>${k}</th>`).join('')}
+              </tr>
+            </thead>
+            <tbody>
+              ${pcfSegments.map((s, i) => `
+                <tr data-index="${i}">
+                  ${Object.values(s).map(v => `<td class="mono">${v !== undefined ? v : ''}</td>`).join('')}
                 </tr>
               `).join('')}
             </tbody>

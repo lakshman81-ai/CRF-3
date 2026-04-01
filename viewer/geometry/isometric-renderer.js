@@ -14,6 +14,7 @@ import { createNodeLabel, createSegmentLabel, computeStretches } from './labels.
 import { materialFromDensity } from '../utils/formatter.js';
 import { state } from '../core/state.js';
 import { on } from '../core/event-bus.js';
+import { buildUniversalCSV, normalizeToPCF, adaptForRenderer } from '../utils/accdb-to-pcf.js';
 
 export class IsometricRenderer {
   constructor(canvasContainer) {
@@ -317,7 +318,19 @@ export class IsometricRenderer {
     const data = state.parsed;
     if (!data?.elements?.length) return;
 
-    const { elements, nodes, restraints = [], forces = [] } = data;
+    const elements = this._getPcfElements();
+    const { nodes, restraints = [], forces = [] } = data;
+
+    // We must ensure elements have fromPos / toPos mapped for drawing
+    for (const el of elements) {
+        if (!el.fromPos && el.from !== undefined) {
+           el.fromPos = nodes[el.from];
+        }
+        if (!el.toPos && el.to !== undefined) {
+           el.toPos = nodes[el.to];
+        }
+    }
+
     const legendField = state.legendField;
     const isHeatMap = legendField.startsWith('HeatMap:');
     const heatField = isHeatMap ? legendField.split(':')[1] : null;
@@ -325,11 +338,14 @@ export class IsometricRenderer {
 
     // Build pipe lines with mode-aware coloring
     for (const el of elements) {
+      // Skip if position mapping failed for some reason
+      if (!el.fromPos || !el.toPos) continue;
+
       const a = toThree(el.fromPos);
       const b = toThree(el.toPos);
       const col = colorForMode(el, legendField, range);
 
-      if (el.bend) {
+      if (el.isBend || el.bend) {
         const mid = new THREE.Vector3().addVectors(a, b).multiplyScalar(0.5);
         const arc = createBendArc(a, mid, b, col, 3, this._renderer);
         this._pipeGroup.add(arc);
@@ -361,11 +377,26 @@ export class IsometricRenderer {
     this._fitToScene();
   }
 
+  /** Get elements processed through the 3-stage PCF pipeline */
+  _getPcfElements() {
+    const data = state.parsed;
+    if (!data?.elements?.length) return [];
+    try {
+      const csvRows = buildUniversalCSV(data);
+      const pcfSegments = normalizeToPCF(csvRows);
+      const adapted = adaptForRenderer(pcfSegments, data);
+      return adapted.elements;
+    } catch (err) {
+      console.warn("PCF pipeline failed, falling back to raw elements:", err);
+      return data.elements;
+    }
+  }
+
   /** Rebuild only labels + legend (called on legend-changed) */
   _rebuildAll() {
     const data = state.parsed;
     if (!data?.elements?.length) return;
-    const { elements } = data;
+    const elements = this._getPcfElements();
     const legendField = state.legendField;
     const isHeatMap = legendField.startsWith('HeatMap:');
     const heatField = isHeatMap ? legendField.split(':')[1] : null;
@@ -389,7 +420,8 @@ export class IsometricRenderer {
     const data = state.parsed;
     if (!data?.elements?.length) return;
 
-    const { elements, nodes } = data;
+    const elements = this._getPcfElements();
+    const { nodes } = data;
     const showLabels = state.geoToggles.nodeLabels;
 
     // Node number labels
@@ -473,7 +505,7 @@ export class IsometricRenderer {
           .map(c => `<div class="legend-row"><span class="legend-swatch" style="background:#${c.color.toString(16).padStart(6,'0')}"></span><span>${c.label}</span></div>`)
           .join('');
         if (!swatches) {
-          swatches = `<div class="legend-row"><span class="legend-swatch" style="background:#444"></span><span>Pipe</span></div>`;
+          swatches = `<div class="legend-row"><span class="legend-swatch" style="background:#555"></span><span>Pipe</span></div>`;
         }
       }
 

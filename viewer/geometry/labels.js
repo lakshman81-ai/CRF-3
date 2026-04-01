@@ -113,15 +113,18 @@ export function computeStretches(elements, legendField, materialFromDensity) {
   let currentDirKey = null;
 
   for (const el of elements) {
+    // Ignore elements missing positions
+    if (!el.fromPos || !el.toPos) continue;
+
     const dk = dirKey(el.dx, el.dy, el.dz);
     const text = segmentLabelText(el, legendField, materialFromDensity);
 
-    if (dk === currentDirKey && current) {
+    if (dk === currentDirKey && current && current.text === text) {
       current.elements.push(el);
       // Extend the stretch endpoint
       current.endPos = el.toPos;
     } else {
-      if (current) {
+      if (current && current.startPos && current.endPos) {
         // Compute midpoint of the completed stretch
         const mid = {
           x: (current.startPos.x + current.endPos.x) / 2,
@@ -136,7 +139,7 @@ export function computeStretches(elements, legendField, materialFromDensity) {
   }
 
   // Push last stretch
-  if (current) {
+  if (current && current.startPos && current.endPos) {
     const mid = {
       x: (current.startPos.x + current.endPos.x) / 2,
       y: (current.startPos.y + current.endPos.y) / 2,
